@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "A panel of AI critics that says what is weak or risky about an innovation idea."
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
-dependencies = []
+dependencies = [
+    "pydantic>=2.12",
+]
 
 [dependency-groups]
 dev = [
