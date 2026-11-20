@@ -16,8 +16,24 @@ and model outputs behind it.
 
 ## Setup
 
-Copy `.env.example` to `.env` and add the API keys you need. Git ignores
+You need [uv](https://docs.astral.sh/uv/). It also installs the Python
+version the project uses (3.14).
+
+```bash
+uv sync
+```
+
+Then copy `.env.example` to `.env` and add the API keys you need. Git ignores
 `.env`, so the keys stay out of the repository.
+
+## Checks
+
+```bash
+uv run ruff check
+uv run ruff format --check
+uv run pyright
+uv run pytest
+```
 
 ## Licence
 
