@@ -1,0 +1,29 @@
+# Secrets: never commit environment files
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Run logs: raw model logs can contain secrets, so they stay local
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+*.egg-info/
+
+# Web UI
+node_modules/
+.next/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
