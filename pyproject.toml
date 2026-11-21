@@ -11,6 +11,9 @@ dependencies = [
     "pydantic>=2.12",
 ]
 
+[project.scripts]
+skeptic = "skeptic.cli:main"
+
 [project.entry-points.inspect_ai]
 skeptic = "skeptic._registry"
 

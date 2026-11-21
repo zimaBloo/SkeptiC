@@ -71,6 +71,17 @@ uv run inspect eval skeptic/skeptic_panel -T idea=ideas/shelfsense.md \
   --model-role risk=ollama/qwen3.5:9b-q4_K_M
 ```
 
+The `skeptic` command runs the same panel and also writes the run as one
+JSON file: the idea, each critic's verdict and timing, the combined verdict,
+the checks, and where the run came from (git commit, prompt hash, model
+builds). It goes next to the Inspect log unless you pass `--out`.
+
+```bash
+uv run skeptic run ideas/shelfsense.md
+uv run skeptic export logs/<run>.eval   # the same file, from an earlier run
+uv run skeptic schema                   # the file's format, as JSON Schema
+```
+
 ## Checks
 
 GitHub runs these on every push to `main` and on every pull request.
