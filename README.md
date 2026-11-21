@@ -73,6 +73,8 @@ uv run inspect eval skeptic/skeptic_panel -T idea=ideas/shelfsense.md \
 
 ## Checks
 
+GitHub runs these on every push to `main` and on every pull request.
+
 ```bash
 uv run ruff check
 uv run ruff format --check
