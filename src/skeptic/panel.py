@@ -2,8 +2,9 @@
 
 Each critic gets the idea and its own system prompt, and nothing else: no
 other critic's answer and no score to anchor on. The critics run one after
-another on the models bound to their roles, then the combining step merges
-their verdicts and writes the panel's statement. Inspect logs every model
+another on the models bound to their roles. Two of the prompt's severity rules
+are then applied in code (see verdict.apply_severity_rules), and the combining
+step merges the verdicts and writes the panel's statement. Inspect logs every model
 call, so each verdict can be traced back to the exact prompt and reply.
 
 Run it with:
@@ -50,7 +51,14 @@ from skeptic.critics import (
     prompts_digest,
     submission_prompt,
 )
-from skeptic.verdict import CriticVerdict, VerdictParseError, parse_verdict, verdict_json_schema
+from skeptic.verdict import (
+    CriticVerdict,
+    Overall,
+    VerdictParseError,
+    apply_severity_rules,
+    parse_verdict,
+    verdict_json_schema,
+)
 
 # One model family per critic, chosen from a test of four local models on the
 # demo idea (21 Nov 2026). The combiner runs on the model that made the fewest
@@ -108,7 +116,14 @@ class CriticResult(BaseModel):
     critic: CriticName
     model: str
     served: ServedModel | None = None
-    verdict: CriticVerdict | None = None
+    verdict: CriticVerdict | None = Field(
+        default=None,
+        description="The verdict after the severity rules: fixable fatal issues capped at "
+        "major, and the overall rating worked out from the severities.",
+    )
+    model_overall: Overall | None = Field(
+        default=None, description="The overall rating the critic itself gave."
+    )
     extracted: bool = False
     checks: VerdictChecks | None = None
     usage: CallUsage = Field(default_factory=CallUsage)
@@ -241,9 +256,12 @@ async def run_critic(critic: CriticName, idea: str, settings: Settings) -> Criti
     except VerdictParseError as error:
         result.error = with_stop_reason(str(error), output)
         return result
-    result.verdict = parsed.verdict
-    result.extracted = parsed.extracted
+    # Checks look at the verdict as the critic wrote it; the panel then applies the
+    # severity rules, so the combiner and the scores see the adjusted verdict.
     result.checks = check_verdict(parsed.verdict, idea)
+    result.verdict, _ = apply_severity_rules(parsed.verdict)
+    result.model_overall = parsed.verdict.overall
+    result.extracted = parsed.extracted
     return result
 
 
@@ -351,6 +369,7 @@ def with_stop_reason(message: str, output: ModelOutput) -> str:
         "quotes_not_verbatim": [mean()],
         "flagged_fields": [mean()],
         "overall_mismatches": [mean()],
+        "fatals_capped": [mean()],
         "combiner_flags": [mean()],
         "near_context_limit": [mean()],
     }
@@ -378,6 +397,7 @@ def panel_checks() -> Scorer:
                     sum(len(c.cut_off_fields) + len(c.severity_as_issue) for c in checks)
                 ),
                 "overall_mismatches": float(sum(c.overall_mismatch for c in checks)),
+                "fatals_capped": float(sum(len(c.fatal_but_fixable) for c in checks)),
                 "combiner_flags": float(
                     0
                     if combined is None

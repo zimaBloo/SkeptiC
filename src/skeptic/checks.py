@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from skeptic.combine import CombinedVerdict
 from skeptic.critics import CriticName
-from skeptic.verdict import CriticVerdict, Overall
+from skeptic.verdict import CriticVerdict, overall_from_issues
 
 SEVERITY_WORDS = frozenset({"minor", "major", "fatal"})
 
@@ -49,7 +49,12 @@ class VerdictChecks(BaseModel):
     )
     overall_mismatch: bool = Field(
         default=False,
-        description="The overall rating is not the one the issues' severities give.",
+        description="The critic's own overall rating is not the one its severities give.",
+    )
+    fatal_but_fixable: list[str] = Field(
+        default_factory=list,
+        description="Issues marked fatal although the critic called them fixable within the "
+        "idea. The panel caps these at major.",
     )
 
     @property
@@ -59,6 +64,7 @@ class VerdictChecks(BaseModel):
             or self.cut_off_fields
             or self.severity_as_issue
             or self.overall_mismatch
+            or self.fatal_but_fixable
         )
 
 
@@ -99,7 +105,7 @@ class CombinedChecks(BaseModel):
 
 
 def check_verdict(verdict: CriticVerdict, idea: str) -> VerdictChecks:
-    """Run every check on one critic's verdict."""
+    """Run every check on one critic's verdict, as the critic wrote it."""
     checks = VerdictChecks(overall_mismatch=verdict.overall != overall_from_issues(verdict))
     if looks_cut_off(verdict.summary):
         checks.cut_off_fields.append("summary")
@@ -108,6 +114,8 @@ def check_verdict(verdict: CriticVerdict, idea: str) -> VerdictChecks:
             checks.quotes_not_in_idea.append(issue.quote)
         if issue.issue.strip().rstrip(".").lower() in SEVERITY_WORDS:
             checks.severity_as_issue.append(f"issues[{index}].issue")
+        if issue.severity == "fatal" and issue.fixable_within_idea:
+            checks.fatal_but_fixable.append(f"issues[{index}]")
         for field in ("issue", "why_it_matters", "how_to_improve"):
             if looks_cut_off(getattr(issue, field)):
                 checks.cut_off_fields.append(f"issues[{index}].{field}")
@@ -139,19 +147,6 @@ def check_combined(
         if serious and critic not in in_points:
             checks.critics_missing_from_points.append(critic)
     return checks
-
-
-def overall_from_issues(verdict: CriticVerdict) -> Overall:
-    """The overall rating that the prompt's rule gives for these issues."""
-    severities = [issue.severity for issue in verdict.issues]
-    if "fatal" in severities:
-        return "not viable"
-    majors = severities.count("major")
-    if majors >= 3:
-        return "weak"
-    if majors >= 1:
-        return "promising"
-    return "strong"
 
 
 def quote_in_idea(quote: str, idea: str) -> bool:

@@ -19,6 +19,10 @@ class Issue(BaseModel):
     issue: str = Field(description="What is weak or risky.")
     why_it_matters: str = Field(description="Why it is a problem for the idea.")
     how_to_improve: str = Field(description="A concrete change that would fix or reduce it.")
+    fixable_within_idea: bool = Field(
+        description="Whether the problem can be fixed while keeping the idea's product, "
+        "customer and core offer."
+    )
     severity: Severity
 
 
@@ -46,6 +50,39 @@ class ParsedVerdict:
     # True when the JSON had to be cut out of surrounding text, e.g. from a model
     # that cannot be forced into JSON output. Logged so format slips stay visible.
     extracted: bool
+
+
+def apply_severity_rules(verdict: CriticVerdict) -> tuple[CriticVerdict, list[int]]:
+    """Apply two of the prompt's rules in code, where a model cannot get them wrong.
+
+    An issue the critic itself calls fixable within the idea is not fatal, so it is
+    capped at major. The overall rating is then worked out from the severities.
+    Returns the adjusted verdict and the positions of the issues that were capped.
+    """
+    capped = [
+        index
+        for index, issue in enumerate(verdict.issues)
+        if issue.severity == "fatal" and issue.fixable_within_idea
+    ]
+    issues = [
+        issue.model_copy(update={"severity": "major"}) if index in capped else issue
+        for index, issue in enumerate(verdict.issues)
+    ]
+    adjusted = verdict.model_copy(update={"issues": issues})
+    return adjusted.model_copy(update={"overall": overall_from_issues(adjusted)}), capped
+
+
+def overall_from_issues(verdict: CriticVerdict) -> Overall:
+    """The overall rating that the prompt's rule gives for these issues."""
+    severities = [issue.severity for issue in verdict.issues]
+    if "fatal" in severities:
+        return "not viable"
+    majors = severities.count("major")
+    if majors >= 3:
+        return "weak"
+    if majors >= 1:
+        return "promising"
+    return "strong"
 
 
 def verdict_json_schema() -> dict[str, Any]:

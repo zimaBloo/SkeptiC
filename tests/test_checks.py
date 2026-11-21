@@ -4,7 +4,6 @@ from skeptic.checks import (
     check_combined,
     check_verdict,
     looks_cut_off,
-    overall_from_issues,
     quote_in_idea,
 )
 from skeptic.combine import CombinedVerdict
@@ -22,12 +21,13 @@ EN_DASH = chr(0x2013)
 ELLIPSIS = chr(0x2026)
 
 
-def issue(**changes: str) -> Issue:
+def issue(**changes: Any) -> Issue:
     fields = {
         "quote": "There are no direct competitors",
         "issue": "Competitors exist.",
         "why_it_matters": "The plan ignores them.",
         "how_to_improve": "List the competitors and how the product differs.",
+        "fixable_within_idea": True,
         "severity": "major",
     }
     return Issue.model_validate(fields | changes)
@@ -76,23 +76,16 @@ def test_cut_off_text_is_detected() -> None:
     assert not looks_cut_off("")
 
 
-def test_overall_follows_the_prompts_rule() -> None:
-    assert overall_from_issues(verdict(issue(severity="fatal"), issue())) == "not viable"
-    assert overall_from_issues(verdict(issue(), issue(), issue())) == "weak"
-    assert overall_from_issues(verdict(issue(), issue(severity="minor"))) == "promising"
-    assert overall_from_issues(verdict(issue(severity="minor"))) == "strong"
-    assert overall_from_issues(verdict()) == "strong"
-
-
 def test_check_verdict_reports_where_each_problem_is() -> None:
     checked = CriticVerdict(
         issues=[
             issue(),
             issue(quote="made-up words", issue="Major"),
             issue(how_to_improve="Partner with a retailer (e.g., "),
+            issue(severity="fatal"),
         ],
         summary="Competitors exist (e.g., ",
-        overall="not viable",
+        overall="weak",
     )
 
     checks = check_verdict(checked, IDEA)
@@ -101,7 +94,8 @@ def test_check_verdict_reports_where_each_problem_is() -> None:
     assert checks.quotes_not_in_idea == ["made-up words"]
     assert checks.severity_as_issue == ["issues[1].issue"]
     assert checks.cut_off_fields == ["summary", "issues[2].how_to_improve"]
-    assert checks.overall_mismatch  # three major issues give 'weak'
+    assert checks.overall_mismatch  # a fatal issue gives 'not viable', so 'weak' is wrong
+    assert checks.fatal_but_fixable == ["issues[3]"]
 
 
 def test_clean_verdict_is_not_flagged() -> None:

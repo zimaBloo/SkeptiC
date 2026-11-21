@@ -40,8 +40,10 @@ $focus
   keeping the core idea.
 - minor: worth fixing, but the idea can work without the fix.
 
-For a fatal issue, how_to_improve says what would have to change, even if
-that means a different idea.
+Decide fixable_within_idea before severity: can the problem be fixed while
+keeping the idea's product, customer and core offer? If yes, the issue is
+major or minor, never fatal. For a fatal issue, how_to_improve says what
+would have to change, even if that means a different idea.
 
 ## Overall rating
 
@@ -57,6 +59,7 @@ Use the first level that fits, in this order:
 Answer in English as JSON with:
 
 - issues: each with quote, issue (one sentence that states the problem),
-  why_it_matters, how_to_improve and severity (minor, major or fatal).
+  why_it_matters, how_to_improve, fixable_within_idea (true or false) and
+  severity (minor, major or fatal).
 - summary: two to four sentences on the main weaknesses from your angle.
 - overall: not viable, weak, promising or strong.

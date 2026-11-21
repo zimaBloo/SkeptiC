@@ -2,21 +2,10 @@
 
 import json
 from pathlib import Path
-from typing import Any
 
-from inspect_ai import Task
-from inspect_ai import eval as inspect_eval
-from inspect_ai.log import EvalLog, EvalSample
-from inspect_ai.model import (
-    ChatMessage,
-    GenerateConfig,
-    ModelOutput,
-    ModelUsage,
-    ResponseSchema,
-    get_model,
-)
-from inspect_ai.tool import ToolChoice, ToolInfo
+from inspect_ai.model import ModelOutput, ModelUsage, ResponseSchema, get_model
 from inspect_ai.util import JSONSchema
+from mock_panel import IDEA, Recorder, only_sample, run_panel, verdict
 
 from skeptic.combine import combined_json_schema
 from skeptic.critics import CRITICS, critic_system_prompt, prompts_digest, submission_prompt
@@ -27,96 +16,8 @@ from skeptic.panel import (
     call_usage,
     generation_config,
     parse_served_model,
-    skeptic_panel,
 )
 from skeptic.verdict import verdict_json_schema
-
-IDEA = "A fridge camera. There are no direct competitors."
-
-COMBINED = json.dumps(
-    {
-        "points": [
-            {
-                "point": "Competitors exist.",
-                "critics": ["market", "technical", "customer", "risk"],
-                "severity": "major",
-            }
-        ],
-        "disagreements": [],
-        "improvements": ["Name the competitors."],
-        "statement": "The panel's statement.",
-    }
-)
-
-
-def verdict(critic: str, quote: str = "There are no direct competitors") -> str:
-    return json.dumps(
-        {
-            "issues": [
-                {
-                    "quote": quote,
-                    "issue": f"A {critic} problem.",
-                    "why_it_matters": "It weakens the plan.",
-                    "how_to_improve": "Fix the claim.",
-                    "severity": "major",
-                }
-            ],
-            "summary": f"The {critic} critic's summary.",
-            "overall": "promising",
-        }
-    )
-
-
-class Recorder:
-    """A mock model that gives a fixed reply and records every request it gets."""
-
-    def __init__(self, reply: str, stop_reason: Any = "stop") -> None:
-        self.reply = reply
-        self.stop_reason = stop_reason
-        self.calls: list[tuple[list[ChatMessage], GenerateConfig]] = []
-
-    def __call__(
-        self,
-        input: list[ChatMessage],
-        tools: list[ToolInfo],
-        tool_choice: ToolChoice,
-        config: GenerateConfig,
-    ) -> ModelOutput:
-        self.calls.append((input, config))
-        return ModelOutput.from_content(
-            model="mockllm/model", content=self.reply, stop_reason=self.stop_reason
-        )
-
-
-def run_panel(
-    tmp_path: Path, task_args: dict[str, Any] | None = None, **replies: str | Recorder
-) -> tuple[EvalLog, dict[str, Recorder]]:
-    """Run the panel with a mock model per role. Unnamed roles give a valid reply."""
-    defaults: dict[str, str | Recorder] = {critic: verdict(critic) for critic in CRITICS}
-    recorders = {
-        role: reply if isinstance(reply, Recorder) else Recorder(reply)
-        for role, reply in (defaults | {"combiner": COMBINED} | replies).items()
-    }
-    idea_file = tmp_path / "idea.md"
-    idea_file.write_text(IDEA, encoding="utf-8")
-    task: Task = skeptic_panel(idea=str(idea_file), **(task_args or {}))
-
-    [log] = inspect_eval(
-        task,
-        model_roles={
-            role: get_model("mockllm/model", custom_outputs=recorder, memoize=False)
-            for role, recorder in recorders.items()
-        },
-        display="none",
-        log_dir=str(tmp_path / "logs"),
-    )
-    return log, recorders
-
-
-def only_sample(log: EvalLog) -> EvalSample:
-    assert log.samples is not None
-    [sample] = log.samples
-    return sample
 
 
 def test_panel_runs_every_critic_then_combines(tmp_path: Path) -> None:
@@ -147,9 +48,28 @@ def test_scores_count_what_the_checks_found(tmp_path: Path) -> None:
         "quotes_not_verbatim": 1.0,
         "flagged_fields": 1.0,
         "overall_mismatches": 1.0,
+        "fatals_capped": 0.0,
         "combiner_flags": 1.0,  # the mock combiner names risk, which gave no review
         "near_context_limit": 0.0,  # only known for Ollama models
     }
+
+
+def test_fixable_fatal_is_capped_before_the_combiner_sees_it(tmp_path: Path) -> None:
+    fatal = json.loads(verdict("market", severity="fatal", fixable=True))
+    fatal["overall"] = "not viable"
+    log, recorders = run_panel(tmp_path, market=json.dumps(fatal))
+
+    sample = only_sample(log)
+    market = sample.store_as(PanelResult).critics[0]
+    assert market.verdict is not None
+    assert market.verdict.issues[0].severity == "major"
+    assert market.verdict.overall == "promising"
+    assert market.model_overall == "not viable"
+    assert market.checks is not None and market.checks.fatal_but_fixable == ["issues[0]"]
+    [(messages, _)] = recorders["combiner"].calls
+    assert '"severity": "fatal"' not in messages[1].text
+    assert sample.scores is not None
+    assert sample.scores["panel_checks"].value["fatals_capped"] == 1.0  # type: ignore[index]
 
 
 def test_each_critic_sees_only_the_idea_and_its_own_prompt(tmp_path: Path) -> None:
