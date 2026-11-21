@@ -82,3 +82,8 @@ def test_schema_forbids_extra_fields_everywhere() -> None:
 
     assert schema["additionalProperties"] is False
     assert schema["properties"]["issues"]["items"]["additionalProperties"] is False
+
+
+def test_issues_come_before_summary_and_rating() -> None:
+    # A model writes fields in schema order, so it should work out the issues first.
+    assert list(verdict_json_schema()["properties"]) == ["issues", "summary", "overall"]

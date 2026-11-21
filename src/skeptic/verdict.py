@@ -23,17 +23,21 @@ class Issue(BaseModel):
 
 
 class CriticVerdict(BaseModel):
-    """What one critic returns: a short statement first, then the issues behind it."""
+    """What one critic returns: the issues, then a short summary and a rating.
+
+    The issues come first so that a model writes the summary and the rating after
+    it has worked out the issues, not before.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    summary: str = Field(description="Two to four sentences on the main weaknesses.")
     issues: list[Issue] = Field(description="The most important problems, most serious first.")
+    summary: str = Field(description="Two to four sentences on the main weaknesses.")
     overall: Overall
 
 
 class VerdictParseError(ValueError):
-    """Raised when a model reply cannot be turned into a CriticVerdict."""
+    """Raised when a model reply cannot be turned into the expected structure."""
 
 
 @dataclass(frozen=True)
@@ -45,12 +49,17 @@ class ParsedVerdict:
 
 
 def verdict_json_schema() -> dict[str, Any]:
-    """JSON Schema for CriticVerdict with every $ref inlined.
+    """JSON Schema for CriticVerdict, ready to send to a model."""
+    return json_schema_for(CriticVerdict)
+
+
+def json_schema_for(model: type[BaseModel]) -> dict[str, Any]:
+    """JSON Schema for a pydantic model with every $ref inlined.
 
     Some providers and local engines handle $ref poorly, so the schema sent to a
     model is self-contained.
     """
-    schema = CriticVerdict.model_json_schema()
+    schema = model.model_json_schema()
     defs = schema.pop("$defs", {})
     return _inline_refs(schema, defs)
 
@@ -68,6 +77,16 @@ def _inline_refs(node: Any, defs: dict[str, Any]) -> Any:
 
 def parse_verdict(text: str) -> ParsedVerdict:
     """Turn a critic's raw reply into a validated verdict."""
+    verdict, extracted = parse_reply(text, CriticVerdict)
+    return ParsedVerdict(verdict, extracted)
+
+
+def parse_reply[M: BaseModel](text: str, model: type[M]) -> tuple[M, bool]:
+    """Validate a raw model reply against a pydantic model.
+
+    Returns the validated object and whether the JSON had to be cut out of
+    surrounding text.
+    """
     extracted = False
     try:
         data = json.loads(text)
@@ -75,9 +94,11 @@ def parse_verdict(text: str) -> ParsedVerdict:
         data = _extract_json_object(text)
         extracted = True
     try:
-        return ParsedVerdict(CriticVerdict.model_validate(data), extracted)
+        return model.model_validate(data), extracted
     except ValidationError as error:
-        raise VerdictParseError(f"reply does not match the verdict schema: {error}") from error
+        raise VerdictParseError(
+            f"reply does not match the {model.__name__} schema: {error}"
+        ) from error
 
 
 def _extract_json_object(text: str) -> Any:
