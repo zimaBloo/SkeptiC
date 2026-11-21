@@ -11,8 +11,8 @@ from collections.abc import Mapping
 
 from pydantic import BaseModel, Field
 
-from skeptic.combine import CombinedVerdict
-from skeptic.critics import CriticName
+from skeptic.combine import CombinedVerdict, issue_id
+from skeptic.critics import CRITICS, CriticName
 from skeptic.verdict import CriticVerdict, overall_from_issues
 
 SEVERITY_WORDS = frozenset({"minor", "major", "fatal"})
@@ -22,11 +22,49 @@ SEVERITY_WORDS = frozenset({"minor", "major", "fatal"})
 # which leaves fields ending in things like "(e.g., ".
 _CUT_OFF_ENDINGS = ("(", ",", ":", ";", " e.g.", " i.e.", " such as", " and", " or")
 
+# Phrases that make a statement sound fatal, and words that deny such a phrase.
+_FATAL_WORDS = re.compile(
+    r"(?<!non-)\bfatal(?:ly)?\b|\bnot (?:\w+ ){0,2}?viable\b|\b(?:non-?viable|unviable)\b",
+    re.IGNORECASE,
+)
+_NEGATIONS = frozenset(
+    {
+        "no",
+        "not",
+        "none",
+        "nothing",
+        "never",
+        "without",
+        "neither",
+        "nor",
+        "hardly",
+        "cannot",
+        "can't",
+        "won't",
+        "wouldn't",
+        "isn't",
+        "aren't",
+        "wasn't",
+        "weren't",
+        "didn't",
+        "doesn't",
+        "don't",
+    }
+)
+_CLAUSE_OPENERS = frozenset({"no", "none", "neither", "nothing", "nobody"})
+_CLAUSE_BREAK = re.compile(
+    r"[.;:!?\n]|\b(?:but|because|and|while|so|which|although|though|whereas)\b",
+    re.IGNORECASE,
+)
+# How many words before a match a negation may be and still deny it.
+_NEGATION_WINDOW = 5
+
 # Characters that differ between a faithful quote and the idea for reasons that
 # do not change the words: quote marks of every kind and Markdown emphasis are
 # dropped, dashes become hyphens, and the ellipsis character becomes three dots.
 _DROPPED = "'\"\u2018\u2019\u201a\u201b\u201c\u201d\u201e\u00ab\u00bb*_`"
 _DASHES = "\u2010\u2011\u2012\u2013\u2014\u2212"
+_TRANSLATION_APOSTROPHES = str.maketrans({0x2018: "'", 0x2019: "'"})
 _TRANSLATION = str.maketrans(
     {**dict.fromkeys(map(ord, _DROPPED)), **dict.fromkeys(map(ord, _DASHES), "-"), 0x2026: "..."}
 )
@@ -71,36 +109,52 @@ class VerdictChecks(BaseModel):
 class CombinedChecks(BaseModel):
     """What the checks found in the combined verdict. Empty means nothing was flagged."""
 
-    critics_without_review: list[str] = Field(
+    dropped_issues: list[str] = Field(
         default_factory=list,
-        description="Critics named in a point or disagreement who gave no usable review, "
-        "e.g. 'points[0]: risk'.",
+        description="Fatal or major critic issues that appear in no point, e.g. 'risk-2'.",
     )
-    repeated_critics: list[str] = Field(
+    minor_only_points: list[str] = Field(
         default_factory=list,
-        description="Points or disagreements that name the same critic twice.",
+        description="Points made only of minor issues.",
     )
-    points_without_critics: list[str] = Field(
+    points_without_issues: list[str] = Field(
         default_factory=list,
-        description="Points that name no critic, so nobody on the panel raised them.",
+        description="Points that cite no real critic issue, so nobody on the panel raised them.",
+    )
+    unknown_issue_ids: list[str] = Field(
+        default_factory=list,
+        description="Ids the combiner cited that match no critic issue.",
     )
     one_sided_disagreements: list[str] = Field(
         default_factory=list,
-        description="Disagreements that name fewer than two critics.",
+        description="Disagreements with fewer than two critics.",
     )
-    critics_missing_from_points: list[CriticName] = Field(
+    critics_without_review: list[str] = Field(
         default_factory=list,
-        description="Critics who raised a fatal or major issue but appear in no point.",
+        description="Critics named in a disagreement who gave no usable review, "
+        "e.g. 'disagreements[0]: risk'.",
+    )
+    statement_overstates: bool = Field(
+        default=False,
+        description="The statement calls something fatal or not viable, but no critic issue "
+        "is fatal (after the panel's severity rules).",
     )
 
     @property
     def flagged(self) -> bool:
-        return bool(
-            self.critics_without_review
-            or self.repeated_critics
-            or self.points_without_critics
-            or self.one_sided_disagreements
-            or self.critics_missing_from_points
+        return self.count > 0
+
+    @property
+    def count(self) -> int:
+        """How many things were flagged in all."""
+        return (
+            len(self.dropped_issues)
+            + len(self.minor_only_points)
+            + len(self.points_without_issues)
+            + len(self.unknown_issue_ids)
+            + len(self.one_sided_disagreements)
+            + len(self.critics_without_review)
+            + int(self.statement_overstates)
         )
 
 
@@ -126,27 +180,61 @@ def check_combined(
     combined: CombinedVerdict, verdicts: Mapping[CriticName, CriticVerdict | None]
 ) -> CombinedChecks:
     """Check the combined verdict against the critics' own verdicts."""
-    checks = CombinedChecks()
-    answered = {critic for critic, verdict in verdicts.items() if verdict is not None}
-    entries = [(f"points[{i}]", p.critics) for i, p in enumerate(combined.points)] + [
-        (f"disagreements[{i}]", d.critics) for i, d in enumerate(combined.disagreements)
-    ]
-    for where, critics in entries:
-        checks.critics_without_review += [f"{where}: {c}" for c in critics if c not in answered]
-        if len(set(critics)) < len(critics):
-            checks.repeated_critics.append(where)
+    checks = CombinedChecks(unknown_issue_ids=list(combined.unknown_issue_ids))
+    cited = {ref.id for point in combined.points for ref in point.issues}
+    for critic in CRITICS:
+        verdict = verdicts.get(critic)
+        for index, issue in enumerate(verdict.issues if verdict else []):
+            if issue.severity != "minor" and issue_id(critic, index) not in cited:
+                checks.dropped_issues.append(issue_id(critic, index))
     for index, point in enumerate(combined.points):
-        if not point.critics:
-            checks.points_without_critics.append(f"points[{index}]")
+        if not point.issues:
+            checks.points_without_issues.append(f"points[{index}]")
+        elif point.severity == "minor":
+            checks.minor_only_points.append(f"points[{index}]")
+    answered = {critic for critic, verdict in verdicts.items() if verdict is not None}
     for index, disagreement in enumerate(combined.disagreements):
-        if len(set(disagreement.critics)) < 2:
+        critics = [position.critic for position in disagreement.positions]
+        if len(set(critics)) < 2:
             checks.one_sided_disagreements.append(f"disagreements[{index}]")
-    in_points = {critic for point in combined.points for critic in point.critics}
-    for critic, verdict in verdicts.items():
-        serious = verdict is not None and any(i.severity != "minor" for i in verdict.issues)
-        if serious and critic not in in_points:
-            checks.critics_missing_from_points.append(critic)
+        checks.critics_without_review += [
+            f"disagreements[{index}]: {c}" for c in dict.fromkeys(critics) if c not in answered
+        ]
+    no_fatal_issue = not any(
+        issue.severity == "fatal"
+        for verdict in verdicts.values()
+        if verdict is not None
+        for issue in verdict.issues
+    )
+    checks.statement_overstates = no_fatal_issue and calls_fatal(combined.statement)
     return checks
+
+
+def calls_fatal(text: str) -> bool:
+    """Whether a text calls something fatal or not viable, and does not deny it.
+
+    'The pricing is a fatal flaw' and 'not a weakness but a fatal flaw' count.
+    'No problem is fatal', 'the issues are non-fatal' and 'the critic did not call
+    it not viable' do not: a match is skipped when a negation comes a few words
+    before it, or opens its clause. Clauses break at punctuation and at words such
+    as 'but' and 'because'.
+    """
+    text = text.translate(_TRANSLATION_APOSTROPHES)
+    for clause in _CLAUSE_BREAK.split(text):
+        words_in_clause = re.findall(r"[\w']+", clause.lower())
+        opens_with_denial = bool(words_in_clause) and words_in_clause[0] in _CLAUSE_OPENERS
+        for match in _FATAL_WORDS.finditer(clause):
+            before = re.findall(r"[\w']+", clause[: match.start()].lower())
+            if opens_with_denial or _NEGATIONS.intersection(before[-_NEGATION_WINDOW:]):
+                continue
+            return True
+    return False
+
+
+def is_complete_sentence(text: str) -> bool:
+    """Whether a text is non-empty, not cut off, and ends like a finished sentence."""
+    stripped = text.strip()
+    return bool(stripped) and not looks_cut_off(stripped) and stripped[-1] in ".!?\"')]"
 
 
 def quote_in_idea(quote: str, idea: str) -> bool:

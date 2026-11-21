@@ -51,7 +51,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(record_json_schema(), indent=2))
         return 0
     if args.command == "export":
-        record = record_from_log(args.log)
+        try:
+            record = record_from_log(args.log)
+        except ValueError as error:
+            print(f"skeptic export: {error}", file=sys.stderr)
+            return 2
         _write(record, args.out or args.log.with_suffix(".json"))
         return 0 if record.status == "success" else 1
 

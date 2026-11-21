@@ -1,12 +1,14 @@
 from typing import Any
 
 from skeptic.checks import (
+    calls_fatal,
     check_combined,
     check_verdict,
+    is_complete_sentence,
     looks_cut_off,
     quote_in_idea,
 )
-from skeptic.combine import CombinedVerdict
+from skeptic.combine import CombinedVerdict, CombinerReply, resolve_combined
 from skeptic.critics import CriticName
 from skeptic.verdict import CriticVerdict, Issue
 
@@ -102,53 +104,114 @@ def test_clean_verdict_is_not_flagged() -> None:
     assert not check_verdict(verdict(issue()), IDEA).flagged
 
 
-def test_check_combined_flags_points_that_do_not_match_the_reviews() -> None:
-    combined = CombinedVerdict.model_validate(
-        {
-            "points": [
-                {"point": "Competitors exist.", "critics": ["market", "risk"], "severity": "major"},
-                {"point": "Too costly.", "critics": ["market", "market"], "severity": "major"},
-                {"point": "Made up.", "critics": [], "severity": "fatal"},
-            ],
-            "disagreements": [{"point": "Severity of the price.", "critics": ["market"]}],
-            "improvements": [],
-            "statement": "Weak.",
-        }
-    )
-    verdicts: dict[CriticName, CriticVerdict | None] = {
-        "market": verdict(issue()),
-        "technical": None,
-        "customer": verdict(issue()),
-        "risk": None,
+def combine(verdicts: dict[CriticName, CriticVerdict | None], **reply: Any) -> CombinedVerdict:
+    fields: dict[str, Any] = {
+        "points": [],
+        "disagreements": [],
+        "improvements": [],
+        "statement": "Weak.",
     }
+    return resolve_combined(CombinerReply.model_validate(fields | reply), verdicts)
+
+
+def test_check_combined_flags_points_that_do_not_match_the_reviews() -> None:
+    verdicts: dict[CriticName, CriticVerdict | None] = {
+        "market": verdict(issue(), issue(severity="minor")),
+        "technical": None,
+        "customer": verdict(issue(severity="fatal")),
+        "risk": verdict(issue()),
+    }
+    combined = combine(
+        verdicts,
+        points=[
+            {"point": "Competitors exist.", "issues": ["market-1", "technical-1"]},
+            {"point": "A detail.", "issues": ["market-2"]},
+            {"point": "Made up.", "issues": []},
+        ],
+        disagreements=[
+            {"point": "Price.", "positions": [{"critic": "market", "claim": "Too high."}]},
+            {
+                "point": "Build.",
+                "positions": [
+                    {"critic": "risk", "claim": "Easy."},
+                    {"critic": "technical", "claim": "Hard."},
+                ],
+            },
+        ],
+        statement="The idea is not viable.",
+    )
 
     checks = check_combined(combined, verdicts)
 
-    assert checks.critics_without_review == ["points[0]: risk"]
-    assert checks.repeated_critics == ["points[1]"]
-    assert checks.points_without_critics == ["points[2]"]
+    assert checks.unknown_issue_ids == ["technical-1"]
+    assert checks.dropped_issues == ["customer-1", "risk-1"]
+    assert checks.minor_only_points == ["points[1]"]
+    assert checks.points_without_issues == ["points[2]"]
     assert checks.one_sided_disagreements == ["disagreements[0]"]
-    assert checks.critics_missing_from_points == ["customer"]
+    assert checks.critics_without_review == ["disagreements[1]: technical"]
+    # customer-1 really is fatal, so 'not viable' is allowed; the omission is
+    # counted once, as a dropped issue.
+    assert not checks.statement_overstates
+    assert checks.count == 7
+
+
+def test_statement_that_calls_a_major_problem_fatal_is_flagged() -> None:
+    verdicts: dict[CriticName, CriticVerdict | None] = {"market": verdict(issue())}
+    points = [{"point": "Competitors exist.", "issues": ["market-1"]}]
+
+    overstated = combine(verdicts, points=points, statement="Competition is a fatal flaw.")
+    honest = combine(verdicts, points=points, statement="No problem here is fatal.")
+
+    assert check_combined(overstated, verdicts).statement_overstates
+    assert not check_combined(honest, verdicts).statement_overstates
+
+
+def test_calls_fatal_catches_claims_and_skips_denials() -> None:
+    claims = [
+        "The pricing gap is a fatal flaw.",
+        "Although not tested, the battery is a fatal problem.",
+        "This is not just a weakness but a fatal flaw.",
+        "The team has not tested demand and this gap is fatal.",
+        "With no paying customers the idea is not viable.",
+        "The idea is fatally flawed.",
+        "It is not commercially viable.",
+        "The panel does not recommend the idea because of a fatal regulatory flaw.",
+    ]
+    denials = [
+        "No critic rated any issue fatal; the main concerns are major.",
+        "The panel found no fatal problems, but the pricing is unclear.",
+        "None of these problems is fatal on its own.",
+        "The risk critic did not call the idea not viable.",
+        "The issues are serious but non-fatal.",
+        f"The pricing problem isn{CURLY_APOSTROPHE}t fatal.",
+        "It cannot be called fatal.",
+        "None of the issues, including pricing, is fatal.",
+    ]
+
+    assert [calls_fatal(text) for text in claims] == [True] * len(claims)
+    assert [calls_fatal(text) for text in denials] == [False] * len(denials)
+
+
+def test_complete_sentence_needs_text_and_an_ending() -> None:
+    assert is_complete_sentence("The price is too high.")
+    assert is_complete_sentence("The critic called it 'the fridge spy'.")
+    assert not is_complete_sentence("The 'risk' critic called the ")
+    assert not is_complete_sentence("Lower the price (e.g., ")
+    assert not is_complete_sentence("   ")
 
 
 def test_faithful_combined_verdict_is_not_flagged() -> None:
-    combined = CombinedVerdict.model_validate(
-        {
-            "points": [
-                {
-                    "point": "Competitors exist.",
-                    "critics": ["market", "customer"],
-                    "severity": "major",
-                }
-            ],
-            "disagreements": [],
-            "improvements": ["Name the competitors."],
-            "statement": "Weak.",
-        }
-    )
     verdicts: dict[CriticName, CriticVerdict | None] = {
-        "market": verdict(issue()),
-        "customer": verdict(issue(severity="minor")),
+        "market": verdict(issue(severity="fatal", fixable_within_idea=False)),
+        "customer": verdict(issue(), issue(severity="minor")),
     }
+    combined = combine(
+        verdicts,
+        points=[{"point": "Competitors exist.", "issues": ["market-1", "customer-1"]}],
+        statement="One fatal problem: the competitors.",
+    )
 
-    assert not check_combined(combined, verdicts).flagged
+    checks = check_combined(combined, verdicts)
+
+    assert not checks.flagged
+    assert combined.points[0].severity == "fatal"

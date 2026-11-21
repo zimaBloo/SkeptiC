@@ -20,8 +20,7 @@ COMBINED = json.dumps(
         "points": [
             {
                 "point": "Competitors exist.",
-                "critics": ["market", "technical", "customer", "risk"],
-                "severity": "major",
+                "issues": ["market-1", "technical-1", "customer-1", "risk-1"],
             }
         ],
         "disagreements": [],
@@ -58,8 +57,9 @@ def verdict(
 class Recorder:
     """A mock model that gives a fixed reply and records every request it gets."""
 
-    def __init__(self, reply: str, stop_reason: Any = "stop") -> None:
-        self.reply = reply
+    def __init__(self, reply: str | list[str], stop_reason: Any = "stop") -> None:
+        # A list gives one reply per call; the last one repeats.
+        self.replies = [reply] if isinstance(reply, str) else reply
         self.stop_reason = stop_reason
         self.calls: list[tuple[list[ChatMessage], GenerateConfig]] = []
 
@@ -71,8 +71,9 @@ class Recorder:
         config: GenerateConfig,
     ) -> ModelOutput:
         self.calls.append((input, config))
+        reply = self.replies[min(len(self.calls), len(self.replies)) - 1]
         return ModelOutput.from_content(
-            model="mockllm/model", content=self.reply, stop_reason=self.stop_reason
+            model="mockllm/model", content=reply, stop_reason=self.stop_reason
         )
 
 

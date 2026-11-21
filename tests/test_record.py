@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 
 import pytest
-from mock_panel import IDEA, run_panel
+from inspect_ai.event import ModelEvent
+from inspect_ai.log import write_eval_log
+from mock_panel import COMBINED, IDEA, Recorder, run_panel
 
 from skeptic.cli import main
 from skeptic.critics import CRITICS, TITLES, prompts_digest
@@ -16,7 +18,7 @@ def test_record_holds_the_idea_every_critic_and_the_combined_verdict(tmp_path: P
 
     record = record_from_log(log)
 
-    assert record.format_version == 1
+    assert record.format_version == 2
     assert record.status == "success"
     assert record.idea == IDEA
     assert [c.critic for c in record.critics] == list(CRITICS)
@@ -89,3 +91,55 @@ def test_run_writes_a_record_even_when_the_run_fails(tmp_path: Path) -> None:
 def test_run_rejects_a_missing_idea_file(tmp_path: Path) -> None:
     with pytest.raises(SystemExit):
         main(["run", str(tmp_path / "missing.md")])
+
+
+def test_record_of_a_log_from_an_older_format_says_so(tmp_path: Path) -> None:
+    (tmp_path / "broken").mkdir()
+    (tmp_path / "unmarked").mkdir()
+    broken, _ = run_panel(tmp_path / "broken")
+    unmarked, _ = run_panel(tmp_path / "unmarked")
+    assert broken.samples is not None and unmarked.samples is not None
+    broken.samples[0].store["PanelResult:combined"] = {"points": [{"point": "Old."}]}
+    unmarked.samples[0].store["PanelResult:record_format"] = None
+
+    for log in (broken, unmarked):
+        with pytest.raises(ValueError, match="older panel code"):
+            record_from_log(log)
+
+
+def test_export_of_an_older_log_prints_a_message_not_a_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    log, _ = run_panel(tmp_path)
+    assert log.samples is not None
+    log.samples[0].store["PanelResult:record_format"] = None
+    write_eval_log(log, str(tmp_path / "old.eval"))
+
+    assert main(["export", str(tmp_path / "old.eval")]) == 2
+    assert "older panel code" in capsys.readouterr().err
+
+
+def test_combiner_timing_spans_the_repair_call(tmp_path: Path) -> None:
+    overstated = json.loads(COMBINED) | {"statement": "Competition is a fatal flaw."}
+    combiner = Recorder([json.dumps(overstated), json.dumps({"statement": "A major problem."})])
+    log, _ = run_panel(tmp_path, combiner=combiner)
+
+    record = record_from_log(log)
+
+    assert log.samples is not None
+    calls = [e for e in log.samples[0].events if isinstance(e, ModelEvent) and e.role == "combiner"]
+    first, last = calls
+    timing = record.combiner.timing
+    assert timing.started_at == first.timestamp
+    assert timing.finished_at == last.completed
+    assert timing.seconds == pytest.approx((first.working_time or 0) + (last.working_time or 0))
+    assert record.scores["statement_repaired"] == 1.0
+
+
+def test_record_says_why_a_repair_was_not_used(tmp_path: Path) -> None:
+    overstated = json.loads(COMBINED) | {"statement": "Competition is a fatal flaw."}
+    log, _ = run_panel(tmp_path, combiner=Recorder([json.dumps(overstated), "Not JSON."]))
+
+    record = record_from_log(log)
+
+    assert record.combiner.repair_error is not None

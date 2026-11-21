@@ -5,9 +5,9 @@ from pathlib import Path
 
 from inspect_ai.model import ModelOutput, ModelUsage, ResponseSchema, get_model
 from inspect_ai.util import JSONSchema
-from mock_panel import IDEA, Recorder, only_sample, run_panel, verdict
+from mock_panel import COMBINED, IDEA, Recorder, only_sample, run_panel, verdict
 
-from skeptic.combine import combined_json_schema
+from skeptic.combine import combined_json_schema, statement_repair_prompt
 from skeptic.critics import CRITICS, critic_system_prompt, prompts_digest, submission_prompt
 from skeptic.panel import (
     PanelResult,
@@ -50,6 +50,7 @@ def test_scores_count_what_the_checks_found(tmp_path: Path) -> None:
         "overall_mismatches": 1.0,
         "fatals_capped": 0.0,
         "combiner_flags": 1.0,  # the mock combiner names risk, which gave no review
+        "statement_repaired": 0.0,
         "near_context_limit": 0.0,  # only known for Ollama models
     }
 
@@ -103,11 +104,23 @@ def test_combiner_gets_every_verdict(tmp_path: Path) -> None:
     [(messages, config)] = recorders["combiner"].calls
     for critic in CRITICS:
         assert f"The {critic} critic's summary." in messages[1].text
+    ids = [f"{critic}-1" for critic in CRITICS]
     assert config.response_schema == ResponseSchema(
         name="combined_verdict",
-        json_schema=JSONSchema.model_validate(combined_json_schema()),
+        json_schema=JSONSchema.model_validate(combined_json_schema(ids)),
         strict=True,
     )
+
+
+def test_point_severity_is_worked_out_from_the_critics_issues(tmp_path: Path) -> None:
+    log, _ = run_panel(tmp_path, risk=verdict("risk", severity="minor"))
+
+    result = only_sample(log).store_as(PanelResult)
+    assert result.combined is not None
+    [point] = result.combined.points
+    assert point.critics == list(CRITICS)
+    assert point.severity == "major"
+    assert point.severity_split  # three critics said major, risk said minor
 
 
 def test_unusable_critic_reply_is_recorded_and_the_panel_goes_on(tmp_path: Path) -> None:
@@ -120,9 +133,11 @@ def test_unusable_critic_reply_is_recorded_and_the_panel_goes_on(tmp_path: Path)
     assert risk.error is not None and "no JSON object" in risk.error
     [(messages, _)] = recorders["combiner"].calls
     assert '"risk": null' in messages[1].text
-    # The mock combiner still names risk in its point, which the checks catch.
+    # The mock combiner ignores the schema and still cites risk-1, which the checks catch.
+    assert result.combined is not None
+    assert result.combined.points[0].critics == ["market", "technical", "customer"]
     assert result.combined_checks is not None
-    assert result.combined_checks.critics_without_review == ["points[0]: risk"]
+    assert result.combined_checks.unknown_issue_ids == ["risk-1"]
 
 
 def test_panel_fails_when_no_critic_answers(tmp_path: Path) -> None:
@@ -210,3 +225,65 @@ def test_call_near_the_servers_window_is_flagged_counting_cached_tokens() -> Non
     assert small_window.near_context_limit
     assert not large_window.near_context_limit
     assert not call_usage(output, None).near_context_limit
+
+
+def test_statement_that_calls_a_major_problem_fatal_is_repaired_once(tmp_path: Path) -> None:
+    overstated = json.loads(COMBINED) | {"statement": "Competition is a fatal flaw."}
+    repaired = json.dumps({"statement": "Competition is a major problem."})
+    combiner = Recorder([json.dumps(overstated), repaired])
+    log, _ = run_panel(tmp_path, combiner=combiner)
+
+    sample = only_sample(log)
+    result = sample.store_as(PanelResult)
+    assert result.combined is not None
+    assert result.combined.statement == "Competition is a major problem."
+    assert result.combined.first_statement == "Competition is a fatal flaw."
+    assert result.combined.statement_repaired
+    assert result.combined_checks is not None and not result.combined_checks.statement_overstates
+    assert sample.output.completion == "Competition is a major problem."
+    first, second = combiner.calls
+    assert [m.role for m in second[0]] == ["system", "user", "assistant", "user"]
+    assert [m.text for m in second[0][:2]] == [m.text for m in first[0]]
+    assert second[0][2].text == json.dumps(overstated)
+    assert second[0][3].text == statement_repair_prompt()
+    assert second[1].response_schema is not None
+    assert second[1].response_schema.name == "statement_repair"
+    assert result.repair_usage is not None
+
+
+def test_statement_without_overstatement_is_not_repaired(tmp_path: Path) -> None:
+    combiner = Recorder(COMBINED)
+    log, _ = run_panel(tmp_path, combiner=combiner)
+
+    result = only_sample(log).store_as(PanelResult)
+    assert result.combined is not None and not result.combined.statement_repaired
+    assert len(combiner.calls) == 1
+
+
+def test_failed_repair_keeps_the_first_statement_and_the_flag(tmp_path: Path) -> None:
+    overstated = json.loads(COMBINED) | {"statement": "Competition is a fatal flaw."}
+    combiner = Recorder([json.dumps(overstated), "Not JSON."])
+    log, _ = run_panel(tmp_path, combiner=combiner)
+
+    assert log.status == "success"
+    sample = only_sample(log)
+    result = sample.store_as(PanelResult)
+    assert result.combined is not None
+    assert result.combined.statement == "Competition is a fatal flaw."
+    assert sample.output.completion == "Competition is a fatal flaw."
+    assert not result.combined.statement_repaired
+    assert result.combined.first_statement is None
+    assert result.repair_error is not None
+    assert result.repair_usage is not None
+    assert result.combined_checks is not None and result.combined_checks.statement_overstates
+
+
+def test_cut_off_repair_is_not_used(tmp_path: Path) -> None:
+    overstated = json.loads(COMBINED) | {"statement": "Competition is a fatal flaw."}
+    fragment = json.dumps({"statement": "The 'risk' critic called the "})
+    log, _ = run_panel(tmp_path, combiner=Recorder([json.dumps(overstated), fragment]))
+
+    result = only_sample(log).store_as(PanelResult)
+    assert result.combined is not None
+    assert result.combined.statement == "Competition is a fatal flaw."
+    assert result.repair_error is not None and "cut off" in result.repair_error

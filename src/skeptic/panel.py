@@ -23,6 +23,7 @@ import httpx
 from inspect_ai import Task, task
 from inspect_ai.dataset import Sample
 from inspect_ai.model import (
+    ChatMessageAssistant,
     ChatMessageSystem,
     ChatMessageUser,
     GenerateConfig,
@@ -36,13 +37,24 @@ from inspect_ai.solver import Generate, Solver, TaskState, solver
 from inspect_ai.util import JSONSchema, StoreModel, store_as
 from pydantic import BaseModel, Field
 
-from skeptic.checks import CombinedChecks, VerdictChecks, check_combined, check_verdict
+from skeptic.checks import (
+    CombinedChecks,
+    VerdictChecks,
+    check_combined,
+    check_verdict,
+    is_complete_sentence,
+)
 from skeptic.combine import (
     CombinedVerdict,
     combined_json_schema,
     combiner_system_prompt,
+    issue_ids,
     parse_combined,
+    parse_repair,
+    repair_json_schema,
+    resolve_combined,
     reviews_prompt,
+    statement_repair_prompt,
 )
 from skeptic.critics import (
     CRITICS,
@@ -70,6 +82,10 @@ DEFAULT_MODELS: dict[str, str] = {
     "risk": "ollama/nemotron-3-nano:4b-q4_K_M",
     "combiner": "ollama/gemma4:12b-it-qat",
 }
+
+# The shape of what the panel stores for a run. Raise it when that shape changes,
+# so that older logs are recognised as older.
+RECORD_FORMAT = 2
 
 # A call that uses this share of the server's context window may have had its
 # prompt cut: Ollama shortens a prompt that does not fit, without an error.
@@ -124,6 +140,10 @@ class CriticResult(BaseModel):
     model_overall: Overall | None = Field(
         default=None, description="The overall rating the critic itself gave."
     )
+    capped: list[int] = Field(
+        default_factory=list,
+        description="Positions of issues the panel lowered from fatal to major.",
+    )
     extracted: bool = False
     checks: VerdictChecks | None = None
     usage: CallUsage = Field(default_factory=CallUsage)
@@ -133,12 +153,17 @@ class CriticResult(BaseModel):
 class PanelResult(StoreModel):
     """Everything the panel produced for one idea, kept in the sample's store."""
 
+    record_format: int | None = Field(
+        default=None, description="RECORD_FORMAT of the code that ran; missing in older logs."
+    )
     ollama_version: str | None = None
     critics: list[CriticResult] = Field(default_factory=list)
     combiner_model: str | None = None
     combiner_served: ServedModel | None = None
     combiner_usage: CallUsage | None = None
     combiner_error: str | None = None
+    repair_usage: CallUsage | None = None
+    repair_error: str | None = None
     combined: CombinedVerdict | None = None
     combined_extracted: bool = False
     combined_checks: CombinedChecks | None = None
@@ -197,6 +222,7 @@ def panel(
     async def solve(state: TaskState, generate: Generate) -> TaskState:
         idea = state.input_text
         result = store_as(PanelResult)
+        result.record_format = RECORD_FORMAT
         result.ollama_version = await ollama_version()
 
         # One critic after another. With one local model loaded at a time the
@@ -208,29 +234,65 @@ def panel(
         verdicts: dict[CriticName, CriticVerdict | None] = {
             r.critic: r.verdict for r in result.critics
         }
+        capped: dict[CriticName, list[int]] = {r.critic: r.capped for r in result.critics}
         if not any(verdicts.values()):
             errors = "; ".join(f"{r.critic}: {r.error}" for r in result.critics)
             raise RuntimeError(f"no critic returned a usable verdict ({errors})")
 
         model = get_model(role="combiner", required=True)
         result.combiner_model = str(model)
+        messages = [
+            ChatMessageSystem(content=combiner_system_prompt()),
+            ChatMessageUser(content=reviews_prompt(idea, verdicts, capped)),
+        ]
         output = await model.generate(
-            [
-                ChatMessageSystem(content=combiner_system_prompt()),
-                ChatMessageUser(content=reviews_prompt(idea, verdicts)),
-            ],
-            config=generation_config(model, "combined_verdict", combined_json_schema(), settings),
+            messages,
+            config=generation_config(
+                model, "combined_verdict", combined_json_schema(issue_ids(verdicts)), settings
+            ),
         )
         result.combiner_served = await served_model(model)
         result.combiner_usage = call_usage(output, result.combiner_served)
         try:
-            combined, extracted = parse_combined(output.completion)
+            reply, extracted = parse_combined(output.completion)
         except VerdictParseError as error:
             result.combiner_error = with_stop_reason(str(error), output)
             raise VerdictParseError(result.combiner_error) from error
+        combined = resolve_combined(reply, verdicts, capped)
         result.combined = combined
         result.combined_extracted = extracted
         result.combined_checks = check_combined(combined, verdicts)
+
+        if result.combined_checks.statement_overstates:
+            # The statement calls a major problem fatal, usually because a critic's own
+            # words still say 'fatal' after the panel lowered the issue. Ask once for a
+            # rewrite; keep the first statement either way.
+            repair = await model.generate(
+                [
+                    *messages,
+                    ChatMessageAssistant(content=output.completion),
+                    ChatMessageUser(content=statement_repair_prompt()),
+                ],
+                config=generation_config(model, "statement_repair", repair_json_schema(), settings),
+            )
+            result.repair_usage = call_usage(repair, result.combiner_served)
+            try:
+                repaired = parse_repair(repair.completion)
+                if not is_complete_sentence(repaired.statement):
+                    raise VerdictParseError("the rewritten statement is empty or cut off")
+            except VerdictParseError as error:
+                result.repair_error = with_stop_reason(str(error), repair)
+            else:
+                combined = combined.model_copy(
+                    update={
+                        "statement": repaired.statement,
+                        "statement_repaired": True,
+                        "first_statement": combined.statement,
+                    }
+                )
+                result.combined = combined
+                result.combined_checks = check_combined(combined, verdicts)
+
         state.output = ModelOutput.from_content(model=str(model), content=combined.statement)
         return state
 
@@ -259,7 +321,7 @@ async def run_critic(critic: CriticName, idea: str, settings: Settings) -> Criti
     # Checks look at the verdict as the critic wrote it; the panel then applies the
     # severity rules, so the combiner and the scores see the adjusted verdict.
     result.checks = check_verdict(parsed.verdict, idea)
-    result.verdict, _ = apply_severity_rules(parsed.verdict)
+    result.verdict, result.capped = apply_severity_rules(parsed.verdict)
     result.model_overall = parsed.verdict.overall
     result.extracted = parsed.extracted
     return result
@@ -371,6 +433,7 @@ def with_stop_reason(message: str, output: ModelOutput) -> str:
         "overall_mismatches": [mean()],
         "fatals_capped": [mean()],
         "combiner_flags": [mean()],
+        "statement_repaired": [mean()],
         "near_context_limit": [mean()],
     }
 )
@@ -386,7 +449,7 @@ def panel_checks() -> Scorer:
         checks = [r.checks for r in answered if r.checks is not None]
         combined = result.combined_checks
         usages = [r.usage for r in result.critics] + [
-            u for u in [result.combiner_usage] if u is not None
+            u for u in [result.combiner_usage, result.repair_usage] if u is not None
         ]
         return Score(
             value={
@@ -398,14 +461,9 @@ def panel_checks() -> Scorer:
                 ),
                 "overall_mismatches": float(sum(c.overall_mismatch for c in checks)),
                 "fatals_capped": float(sum(len(c.fatal_but_fixable) for c in checks)),
-                "combiner_flags": float(
-                    0
-                    if combined is None
-                    else len(combined.critics_without_review)
-                    + len(combined.repeated_critics)
-                    + len(combined.points_without_critics)
-                    + len(combined.one_sided_disagreements)
-                    + len(combined.critics_missing_from_points)
+                "combiner_flags": float(combined.count if combined else 0),
+                "statement_repaired": float(
+                    result.combined.statement_repaired if result.combined else False
                 ),
                 "near_context_limit": float(sum(u.near_context_limit for u in usages)),
             },

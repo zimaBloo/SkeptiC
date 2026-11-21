@@ -12,15 +12,16 @@ from typing import Any, Literal
 
 from inspect_ai.event import ModelEvent
 from inspect_ai.log import EvalLog, read_eval_log
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from skeptic.checks import CombinedChecks, VerdictChecks
 from skeptic.combine import CombinedVerdict
 from skeptic.critics import CRITICS, TITLES, CriticName
-from skeptic.panel import PanelResult, ServedModel
+from skeptic.panel import RECORD_FORMAT, PanelResult, ServedModel
 from skeptic.verdict import CriticVerdict, Overall
 
-FORMAT_VERSION = 1
+# 2: points cite critic issue ids, and the panel works out their severity.
+FORMAT_VERSION = RECORD_FORMAT
 
 
 class CallTiming(BaseModel):
@@ -41,6 +42,10 @@ class CriticRecord(BaseModel):
     model_overall: Overall | None = Field(
         default=None, description="The overall rating the critic itself gave."
     )
+    capped: list[int] = Field(
+        default_factory=list,
+        description="Positions of issues the panel lowered from fatal to major.",
+    )
     checks: VerdictChecks | None = None
     error: str | None = None
 
@@ -52,12 +57,15 @@ class CombinerRecord(BaseModel):
     combined: CombinedVerdict | None = None
     checks: CombinedChecks | None = None
     error: str | None = None
+    repair_error: str | None = Field(
+        default=None, description="Why a rewrite of an overstated statement was not used."
+    )
 
 
 class PanelRecord(BaseModel):
     """Everything about one panel run on one idea."""
 
-    format_version: Literal[1] = FORMAT_VERSION
+    format_version: Literal[2] = FORMAT_VERSION
     idea_id: str
     idea_file: str | None = None
     idea: str
@@ -88,7 +96,20 @@ def record_from_log(log: EvalLog | str | Path) -> PanelRecord:
     if not log.samples:
         raise ValueError(f"log has no sample: {log.location}")
     sample = log.samples[0]
-    result = sample.store_as(PanelResult)
+    try:
+        result = sample.store_as(PanelResult)
+    except ValidationError:
+        result = None
+    if result is None or result.record_format != FORMAT_VERSION:
+        revision = log.eval.revision
+        written_by = f"commit {revision.commit}" if revision else "an unknown commit"
+        if revision and revision.dirty:
+            written_by += " with uncommitted changes"
+        raise ValueError(
+            f"{Path(str(log.location)).name} was written by older panel code ({written_by}). "
+            f"This version reads only record format {FORMAT_VERSION}; older logs can still "
+            "be opened with 'inspect view'."
+        )
     timings = _timings(sample.events)
     by_critic = {r.critic: r for r in result.critics}
 
@@ -104,6 +125,7 @@ def record_from_log(log: EvalLog | str | Path) -> PanelRecord:
                 timing=timings.get(critic, CallTiming()),
                 verdict=found.verdict if found else None,
                 model_overall=found.model_overall if found else None,
+                capped=found.capped if found else [],
                 checks=found.checks if found else None,
                 error=found.error if found else "the run stopped before this critic answered",
             )
@@ -134,6 +156,7 @@ def record_from_log(log: EvalLog | str | Path) -> PanelRecord:
             combined=result.combined,
             checks=result.combined_checks,
             error=result.combiner_error,
+            repair_error=result.repair_error,
         ),
         scores=_numbers(score.value if score else None),
     )
@@ -145,15 +168,22 @@ def record_json_schema() -> dict[str, Any]:
 
 
 def _timings(events: list[Any]) -> dict[str, CallTiming]:
-    """Start, end and duration of each role's model call."""
+    """Start, end and duration of each role's model calls.
+
+    A role with more than one call (the combiner, when its statement is repaired)
+    runs from the start of its first call to the end of its last.
+    """
     timings: dict[str, CallTiming] = {}
     for event in events:
-        if isinstance(event, ModelEvent) and event.role:
-            timings[event.role] = CallTiming(
-                started_at=event.timestamp,
-                finished_at=event.completed,
-                seconds=event.working_time,
-            )
+        if not isinstance(event, ModelEvent) or not event.role:
+            continue
+        earlier = timings.get(event.role)
+        seconds = (earlier.seconds or 0.0) + (event.working_time or 0.0) if earlier else None
+        timings[event.role] = CallTiming(
+            started_at=earlier.started_at if earlier else event.timestamp,
+            finished_at=event.completed,
+            seconds=seconds if earlier else event.working_time,
+        )
     return timings
 
 
