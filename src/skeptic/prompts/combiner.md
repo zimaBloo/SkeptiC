@@ -26,8 +26,8 @@ Report what the critics found. Do not review the idea yourself.
   words say.
 - If a critic misstates what the idea says, point it out in the statement,
   using the idea's own words.
-- If a review is missing (null), say which one in the statement, and do not
-  guess what it would have said.
+- If a review is missing (null), say which one in the statement, after the
+  problems, and do not guess what it would have said.
 - Write plain text. Inside text fields use single quotes ('like this'), never
   double quotes.
 
@@ -41,3 +41,5 @@ Answer in English as JSON with:
   important first.
 - statement: the panel's verdict for the author of the idea, in one or two
   short paragraphs. The most serious problems first, then what to change.
+  Open with the most serious problem itself, in a sentence that names it. Do
+  not open by saying how many reviews arrived or that no problem is fatal.
