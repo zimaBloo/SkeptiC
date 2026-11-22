@@ -10,30 +10,35 @@ One verdict comes back: what is weak, and how to fix it.**
 <a href="https://github.com/zimaBloo/SkeptiC/actions/workflows/checks.yml"><img src="https://github.com/zimaBloo/SkeptiC/actions/workflows/checks.yml/badge.svg?branch=main" alt="Checks"></a>
 <img src="https://img.shields.io/badge/python-3.14-111316?style=flat-square&logo=python&logoColor=ece8e1" alt="Python 3.14">
 <img src="https://img.shields.io/badge/runs_logged_in-Inspect_AI-111316?style=flat-square" alt="Runs logged in Inspect AI">
-<img src="https://img.shields.io/badge/web-React_19-111316?style=flat-square&logo=react&logoColor=ece8e1" alt="React 19">
 <img src="https://img.shields.io/badge/status-MSc_thesis,_in_progress-d2a657?style=flat-square" alt="Status: MSc thesis, in progress">
-
-[How a run works](#how-a-run-works) · [Quick start](#quick-start) · [The run record](#the-run-record) · [First results](#first-results) · [Development](#development)
 
 </div>
 
 <br>
 
-> [!NOTE]
-> Screenshot to come: a finished run in the web interface, with its time, tokens and cost in the caption.
+<img src=".github/assets/run.png" alt="The run page: the idea at the top, the four critics in a band, the verdict at the bottom, with a stream flowing to the risk critic">
 
-SkeptiC is an MSc thesis project at the University of Helsinki, in the AI Engineering group. The thesis asks whether an AI critic of ideas can be trusted. So each point in a verdict quotes the words of the idea it is about, and each run keeps every prompt and model reply behind it.
+<sub>A replay of a frontier run on [LunchLoop](ideas/lunchloop.md), a made-up test idea: three critics have answered, and Grok, the risk critic, is still writing. The whole run took 1:41 and cost $0.14.</sub>
+
+SkeptiC is an MSc thesis project at the University of Helsinki, in the AI Engineering group. The thesis asks whether an AI critic of ideas can be trusted. So every issue a critic raises has to quote the idea, and every point in the verdict cites the issues behind it. Each run also keeps every prompt and model reply.
 
 ## How a run works
 
-> [!NOTE]
-> Diagram to come: a flowchart of one run. The idea goes to the four critics, their answers go through the severity rules in code, and the combiner turns them into the verdict.
+```mermaid
+flowchart LR
+    idea([Idea]) --> market[Market] & technical[Technical] & customer[Customer] & risk[Risk]
+    market & technical & customer & risk --> rules["Checks and<br>severity rules (code)"]
+    rules --> combiner[Combiner]
+    combiner --> checks["Point severities<br>and checks (code)"]
+    checks -. "at most one rewrite, if<br>the statement overstates" .-> combiner
+    checks --> verdict([Verdict and record])
+```
 
-Every critic answers in the same form. Each issue quotes the idea, says what is wrong and how to fix it, and gets a severity: minor, major or fatal. The critics run on models from different labs and never see each other's answers.
+Each critic returns its issues as JSON, with the fields shown in the run record below: every issue quotes the idea and gets a severity (minor, major or fatal). The critics run on models from four labs.
 
-Two rules are applied in code, where a model can't get them wrong. An issue the critic itself calls fixable can't be fatal, and the overall rating follows from the severities. The combiner then groups the serious issues into points by citing their ids (`market-2`, `risk-1`) and writes the statement. It rates nothing: a point's severity comes from the issues it cites, so the summary can't sound harsher or softer than the critics were.
+Code then applies two rules a model could get wrong: an issue the critic calls fixable can't be fatal, and a critic's overall rating follows from its severities. The combiner groups the major and fatal issues into points by citing their ids (`market-2`, `risk-1`), notes where the critics disagree and writes the statement. It rates nothing: each point takes the highest severity of the issues it cites, so no point can be harsher or softer than the critics were.
 
-Every reply is also checked, for example for a quote the idea doesn't contain or a field cut off mid-sentence. The checks flag problems in the log and never change an answer.
+Every reply is checked too, for example for a quote that isn't in the idea. The checks only flag problems in the log, with one exception: if the statement calls a problem fatal or not viable while no issue is rated fatal, the combiner is asked once to rewrite it.
 
 | Critic | Looks at | Local model | Frontier model |
 |---|---|---|---|
@@ -43,7 +48,7 @@ Every reply is also checked, for example for a quote the idea doesn't contain or
 | Risk and regulation | law, privacy, safety | Nemotron 3 Nano 4B | Grok 4.7 |
 | Combiner | writes the verdict | Gemma 4 12B | Claude Opus 5.5 |
 
-Local models run on your machine through [Ollama](https://ollama.com), so the idea stays private; a run takes several minutes. Frontier models run through [OpenRouter](https://openrouter.ai) with one key for all four labs. A run takes about a minute and a half and cost $0.13 to $0.16 in November 2026.
+Local models run on your own machine through [Ollama](https://ollama.com), so the idea stays private. They take turns, and a run took about nine minutes on the development Mac. Frontier models run side by side through [OpenRouter](https://openrouter.ai), with one key for all four labs. A run takes one to two minutes and cost $0.11 to $0.16 in November 2026.
 
 ## What comes back
 
@@ -51,21 +56,19 @@ Local models run on your machine through [Ollama](https://ollama.com), so the id
 >
 > First, build the unit economics and run a pilot that measures real return rates and paid uses per restaurant. [...]
 
-<sub>The start of the frontier panel's verdict on [LunchLoop](ideas/lunchloop.md), a made-up test idea (22 Nov 2026). Below the statement, the interface lists each point with the critics who raised it and the words of the idea it is about.</sub>
+<sub>The start of the verdict from the run in the screenshot.</sub>
 
 ## Quick start
 
-You need [uv](https://docs.astral.sh/uv/), Node.js (22.22+, 24 or 26+), and either Ollama or an OpenRouter key.
+You need [uv](https://docs.astral.sh/uv/), Node.js (22.22+, 24 or 26+) and either Ollama or an OpenRouter key.
 
 ```bash
 uv sync                        # installs Python 3.14 and the dependencies
-cp .env.example .env           # put OPENROUTER_API_KEY here for frontier runs
+cp .env.example .env           # add OPENROUTER_API_KEY for frontier runs
 npm --prefix web install
 npm --prefix web run build
 uv run skeptic serve           # then open http://127.0.0.1:8000
 ```
-
-Write an idea or pick a sample, then choose local or frontier models.
 
 <details>
 <summary>Setting up the local models</summary>
@@ -78,22 +81,22 @@ ollama pull nemotron-3-nano:4b-q4_K_M
 OLLAMA_CONTEXT_LENGTH=8192 ollama serve
 ```
 
-The combiner reads all four reviews at once, so the context window has to be at least 8192 tokens. The log records the window each model ran with and flags calls that came close to it.
+The combiner reads all four answers at once, so Ollama needs a context window of at least 8192 tokens.
 
 </details>
 
 <details>
-<summary>What to know about frontier runs</summary>
+<summary>Before a frontier run</summary>
 
-- The idea goes to the labs' servers. Use made-up or public ideas, like the ones in `ideas/`.
-- The models reason before they answer. The panel asks for low reasoning effort and allows 16,000 tokens per reply; `--reasoning` and `--max-tokens` change that.
-- Two runs on the same idea can differ. Only Grok uses the temperature setting, and Claude takes no seed.
-- Each model is called only through its own lab's endpoint, and only up to a price cap set in `src/skeptic/lineups.py`. If a lab raises its price above the cap, that critic gives no answer and the others go on. If it's the combiner, the run fails after the critics have answered.
-- More than half of a run's cost is the combined statement. A prepaid balance with auto top-up off limits what can be spent.
+- The idea leaves your machine, so use made-up or public ideas, like the ones in `ideas/`.
+- The panel asks for low reasoning effort and allows 16,000 tokens per reply. Each call reserves that much, so a low prepaid balance can get calls refused; with auto top-up off, the balance caps what can be spent.
+- Each model is called only through its own lab, under a price cap in `src/skeptic/lineups.py`. Above the cap a critic gives no answer and the others go on; if it's the combiner, the run fails.
+- Two runs on the same idea can differ.
 
 </details>
 
-## Command line
+<details>
+<summary>Command line and Inspect</summary>
 
 ```bash
 uv run skeptic run ideas/shelfsense.md                     # local models
@@ -103,63 +106,63 @@ uv run skeptic schema                                      # the record's format
 uv run inspect view                                        # every prompt and reply, in Inspect's viewer
 ```
 
-The panel is an [Inspect](https://inspect.aisi.org.uk) task too. Each critic and the combiner is a model role, so any of them can run on another model:
+The panel is also an [Inspect](https://inspect.aisi.org.uk) task, with each critic and the combiner as a model role, so any of them can run on another model:
 
 ```bash
 uv run inspect eval skeptic/skeptic_panel -T idea=ideas/shelfsense.md \
   --model-role risk=ollama/qwen3.5:9b-q4_K_M
 ```
 
-## The run record
-
-A run leaves two files. The Inspect log has every prompt and every reply. `record.json` has what a reader needs in one document, plus where the run came from: the git commit, a hash of the prompts, and the model builds that served it.
-
-> [!NOTE]
-> Diagram to come: a class diagram of `record.json`. A panel record holds four critic records and one combiner record. Each critic's verdict lists its issues, and each point in the combined verdict cites issues by id.
-
-<details>
-<summary>How the web interface follows a run</summary>
-
-> [!NOTE]
-> Diagram to come: a sequence diagram of the web app starting a run through the API and asking for its progress once a second until the verdict is in.
-
-Runs keep their files in `runs/` and their Inspect logs in `logs/`. Git ignores both.
+That writes only the Inspect log; `skeptic export` turns it into a record.
 
 </details>
 
+## The run record
+
+Each run leaves an Inspect log and the JSON record below, which for local models also names the exact model build. The command line writes the record next to its log in `logs/`; the web app writes it to `runs/<id>/record.json`.
+
+```text
+record.json
+├─ idea, status, git commit, prompts hash
+├─ critics (4): model, summary, rating, checks, time, tokens, cost
+│  └─ issues: quote, what is wrong, why, how to fix, fixable?, severity
+└─ combiner: model, statement, disagreements, checks, time, tokens, cost
+   └─ points: text, critics, severity, the issue ids it cites
+```
+
 ## First results
 
-A pilot on 22 Nov 2026 put the frontier panel against Claude Opus 5.5 working alone, on 16 test ideas with answer keys, some sound and some with planted flaws.
+A pilot on 22 Nov 2026 put the frontier panel against Claude Opus 5.5 working alone, on 16 test ideas with answer keys: some sound, some with planted flaws. Two models graded every answer, and "or" marks where they disagreed.
 
 | | Panel | One model, same checklist | One model, plain question |
 |---|:-:|:-:|:-:|
-| Planted fatal flaws named | 3 of 3 | 3 of 3 | 3 of 3 |
-| Planted weaknesses found | 18 to 22 of 26 | 23 of 26 | 25 of 26 |
+| Planted fatal flaw named | 3 of 3 | 3 of 3 | 3 of 3 |
+| ...and the idea called unworkable | 1 of 3 | 2 of 3 | 3 of 3 |
+| Planted weaknesses found (13, two runs each) | 18 or 22 of 26 | 23 of 26 | 25 of 26 |
 | Sound ideas called unworkable | 0 of 8 | 1 of 8 | 0 or 1 of 8 |
 | Cost per verdict | $0.13 | $0.06 | $0.06 |
 | Time per verdict | 79 s | 28 s | 36 s |
 
-The panel didn't find more than one strong model, and it cost about twice as much. Traceability held: all 20 panel runs finished, and 312 of 313 critic quotes appear word for word in the idea. The samples are tiny, so none of these differences means much yet. Still untested: whether model diversity helps, and the private local lineup. More in the [pilot report](experiments/pilot-2026-11/report.md).
-
-## Repository
-
-```
-src/skeptic/           panel, critics, combiner, checks, run record, CLI, web API
-src/skeptic/prompts/   every prompt the models get
-web/                   the web interface (React, TypeScript, Vite)
-ideas/                 test ideas, some with planted flaws
-experiments/           the pilot: ideas, answer keys, grading, results
-tests/                 the panel end to end on mock models, offline
-```
+The panel found no more than one strong model did, at about twice the cost. Its critics' quotes held up: 312 of 313 appear word for word in the idea. The samples are tiny, so none of these differences means much yet, and model diversity and the local lineup are still untested. The [pilot report](experiments/pilot-2026-11/report.md) has the setup and its limits.
 
 ## Development
+
+```
+src/skeptic/           the panel, the single-model baselines, checks, run record, CLI, web API
+src/skeptic/prompts/   every prompt the panel and the baselines send
+web/                   the web interface (React, TypeScript, Vite)
+ideas/                 sample ideas and their answer keys
+experiments/           the pilot: ideas, answer keys, grading, results
+tests/                 offline tests, including the panel end to end on mock models
+```
 
 ```bash
 uv run skeptic serve           # the API on port 8000
 npm --prefix web run dev       # the interface on http://localhost:5173, reloads on every change
 ```
 
-GitHub runs these checks on every push to `main` and on every pull request:
+<details>
+<summary>Tests GitHub runs on every push and pull request</summary>
 
 ```bash
 uv run ruff check
@@ -170,6 +173,10 @@ npm --prefix web run typecheck
 npm --prefix web test
 ```
 
+GitHub also checks that the web app builds.
+
+</details>
+
 <br>
 
-<sub>MSc thesis, University of Helsinki, AI Engineering group. Licence not added yet.</sub>
+<sub>No licence yet.</sub>
