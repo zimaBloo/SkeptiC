@@ -16,10 +16,12 @@ import { CRITICS, api, type CriticName, type PanelRecord, type RunDetail } from 
 import type { Clouds, Intensities } from "../flow/field";
 import { FlowCanvas } from "../flow/FlowCanvas";
 import { Graticule } from "../flow/Graticule";
+import { NodeIcon } from "../flow/NodeIcon";
 import {
   clampToStage,
   labelRoom,
   layout,
+  type Capsule,
   type Layout,
   type NodeId,
   type Placement,
@@ -167,7 +169,8 @@ export function cloudSize(tokens: number | null): number {
 
 function cloudsFor(timeline: Timeline, states: Record<StepName, StepState>): Clouds {
   const clouds: Clouds = {};
-  for (const name of [...CRITICS, "combiner"] as StepName[]) {
+  // Only critics gather clouds: the verdict is the outlet the flow leaves through.
+  for (const name of CRITICS) {
     if (states[name] === "done") clouds[name] = cloudSize(stepTokens(timeline.steps[name]));
   }
   return clouds;
@@ -190,7 +193,8 @@ export function RunStage(props: {
   const clouds = useMemo(() => cloudsFor(timeline, states), [timeline, states]);
   const l = size.width > 0 ? layout(size.width, size.height, placement) : null;
   const { dragging, dragHandlers } = useNodeDrag(stageRef, placement, setPlacement, l !== null, setOpen);
-  const moved = Object.keys(placement).length > 0;
+  // Only critics move; an older arrangement may still name the idea or the verdict.
+  const moved = Object.keys(placement).some((id) => id !== "idea" && id !== "combiner");
 
   // The stage is a picture to watch and handle, not text to select: a selection that
   // starts on it anyway (a sweep over the canvas) is refused. The card's text stays
@@ -348,6 +352,19 @@ function useNodeDrag(
 
   const dragHandlers = (id: NodeId, at: Point): DragHandlers => {
     if (!enabled) return {};
+    const toggle = () => setOpen((current) => (current === id ? null : id));
+    if (id === "idea" || id === "combiner") {
+      // The inlet and the outlet stay where they are; they only open their card.
+      return {
+        onClick: toggle,
+        onKeyDown: (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            toggle();
+          }
+        },
+      };
+    }
     return {
       onPointerDown: (event) => {
         if (event.button !== 0 || drag.current) return;
@@ -449,21 +466,24 @@ const NODE_NAMES: Record<NodeId, string> = {
 function NodeLabels({ layout: l, run, timeline, states, at, dragging, dragHandlers, open }: LabelProps) {
   const lineup = run.lineup === "frontier" ? "frontier models" : "local models";
   const combiner = timeline.steps.combiner;
+  const seconds = stepSeconds(combiner, at);
+  const verdictMeta =
+    states.combiner === "waiting"
+      ? "waiting for the critics"
+      : `${modelName(combiner.model)} · ${verdictState(states.combiner, seconds)}`;
   return (
     <div className="node-labels is-draggable">
-      <Node
+      <PanelBand layout={l} />
+      <Port
         id="idea"
-        at={l.idea}
+        capsule={l.inlet}
         state="done"
-        dragging={dragging}
         open={open}
         handlers={dragHandlers("idea", l.idea)}
-        room={Math.max(120, l.width - l.idea.x - 48)}
-        compact={l.compact}
         title={run.idea_title}
         meta={`${countWord(4)} critics · ${lineup}`}
       />
-      {/* A step's node appears when the step starts, and stays once it has answered. */}
+      {/* A critic's node appears when it starts, and stays once it has answered. */}
       {CRITICS.filter((critic) => states[critic] !== "waiting").map((critic) => (
         <Node
           key={critic}
@@ -480,23 +500,72 @@ function NodeLabels({ layout: l, run, timeline, states, at, dragging, dragHandle
           meta={criticMeta(timeline.steps[critic], states[critic], at, l.compact)}
         />
       ))}
-      {states.combiner !== "waiting" && (
-        <Node
-          id="combiner"
-          at={l.combiner}
-          state={states.combiner}
-          dragging={dragging}
-          open={open}
-          handlers={dragHandlers("combiner", l.combiner)}
-          room={Math.max(120, l.width - l.combiner.x - 48)}
-          title="Verdict"
-          meta={
-            l.compact
-              ? verdictState(states.combiner, stepSeconds(combiner, at))
-              : `${modelName(combiner.model)} · ${verdictState(states.combiner, stepSeconds(combiner, at))}`
-          }
-        />
-      )}
+      <Port
+        id="combiner"
+        capsule={l.outlet}
+        state={states.combiner}
+        open={open}
+        handlers={dragHandlers("combiner", l.combiner)}
+        title="Verdict"
+        meta={l.compact && states.combiner !== "waiting" ? verdictState(states.combiner, seconds) : verdictMeta}
+      />
+    </div>
+  );
+}
+
+/** The band the four critics work in, between the inlet and the outlet. Its label sits
+ * above the critics; on a phone their own labels hang below them, so the band reaches
+ * further down there. */
+export function PanelBand({ layout: l }: { layout: Layout }) {
+  const height = l.compact ? 172 : 168;
+  const top = l.compact ? l.row - 82 : l.row - height / 2 - 14;
+  return (
+    <div className="panel-band" style={{ top, height }} aria-hidden="true">
+      <span className="panel-band-label" data-quiet>
+        The panel{l.compact ? "" : " · four critics, each blind to the others"}
+      </span>
+    </div>
+  );
+}
+
+/** The idea's inlet and the verdict's outlet: where the flow enters the panel and where
+ * it leaves. They do not move; a click opens their card. */
+export function Port(props: {
+  id: "idea" | "combiner";
+  capsule: Capsule;
+  state: StepState;
+  open?: NodeId | null;
+  handlers?: DragHandlers;
+  title: string;
+  meta: string;
+}) {
+  const { id, capsule, state, open, handlers, title, meta } = props;
+  const interactive = handlers !== undefined;
+  return (
+    <div
+      className={`port port--${id === "idea" ? "inlet" : "outlet"}${open === id ? " is-open" : ""}`}
+      data-state={state}
+      role={interactive ? "button" : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      aria-expanded={interactive ? open === id : undefined}
+      aria-label={interactive ? `${NODE_NAMES[id]}: ${meta}. Open details.` : undefined}
+      onClick={handlers?.onClick}
+      onKeyDown={handlers?.onKeyDown}
+      style={{
+        left: capsule.x - capsule.width / 2,
+        top: capsule.y - capsule.height / 2,
+        width: capsule.width,
+        height: capsule.height,
+      }}
+      data-quiet
+    >
+      <span className="port-mark">
+        <NodeIcon id={id} />
+      </span>
+      <span className="port-text">
+        <span className="port-title">{title}</span>
+        <span className="port-meta mono">{meta}</span>
+      </span>
     </div>
   );
 }
@@ -530,7 +599,9 @@ function Node(props: {
       title="Click for details. Drag to move."
       style={{ left: at.x, top: at.y, "--room": `${room}px` } as CSSProperties}
     >
-      <span className="node-ring" data-state={state} />
+      <span className="node-ring" data-state={state}>
+        <NodeIcon id={id} />
+      </span>
       <div className={`node-text ${compact ? "node-text--below" : "node-text--right"}`} data-quiet>
         <span className="node-title">{title}</span>
         <span className="node-meta mono">{meta}</span>
@@ -579,13 +650,23 @@ function NodeCard(props: {
   const { id, layout: l, run, timeline, states, at, onClose } = props;
   const anchor = id === "idea" ? l.idea : id === "combiner" ? l.combiner : l.critics[id];
   const width = Math.min(CARD_WIDTH, l.width - 32);
-  // Beside the node on the side with room, kept inside the stage.
-  const toLeft = anchor.x > l.width * 0.6;
-  const left = Math.min(Math.max(toLeft ? anchor.x - 34 - width : anchor.x + 34, 16), l.width - width - 16);
-  const below = anchor.y < l.height * 0.55;
-  const style: CSSProperties = below
-    ? { left, top: Math.min(anchor.y + 30, l.height - 120), width }
-    : { left, bottom: Math.max(l.height - anchor.y + 30, 16), width };
+  let style: CSSProperties;
+  if (id === "idea" || id === "combiner") {
+    // Under the inlet, or over the outlet, centred on it.
+    const left = Math.min(Math.max(anchor.x - width / 2, 16), l.width - width - 16);
+    style =
+      id === "idea"
+        ? { left, top: l.inlet.y + l.inlet.height / 2 + 12, width }
+        : { left, bottom: l.height - (l.outlet.y - l.outlet.height / 2) + 12, width };
+  } else {
+    // Beside the node on the side with room, kept inside the stage.
+    const toLeft = anchor.x > l.width * 0.6;
+    const left = Math.min(Math.max(toLeft ? anchor.x - 36 - width : anchor.x + 36, 16), l.width - width - 16);
+    const below = anchor.y < l.height * 0.55;
+    style = below
+      ? { left, top: Math.min(anchor.y + 32, l.height - 120), width }
+      : { left, bottom: Math.max(l.height - anchor.y + 32, 16), width };
+  }
 
   const rows: [string, string][] = [];
   let heading = "";

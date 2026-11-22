@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { clampToStage, curve, labelRoom, layout } from "./geometry";
+import { CRITICS } from "../api";
+import { CAPSULE_HEIGHT, clampToStage, curve, labelRoom, layout } from "./geometry";
 
 describe("layout with dragged nodes", () => {
   it("puts a dragged node at its fraction of the stage and leaves the others in place", () => {
@@ -11,15 +12,45 @@ describe("layout with dragged nodes", () => {
   });
 
   it("keeps the arrangement's shape when the window is resized", () => {
-    const placement = { combiner: { fx: 0.7, fy: 0.4 } };
-    expect(layout(1000, 800, placement).combiner).toEqual({ x: 700, y: 320 });
-    expect(layout(2000, 1000, placement).combiner).toEqual({ x: 1400, y: 400 });
+    const placement = { risk: { fx: 0.7, fy: 0.4 } };
+    expect(layout(1000, 800, placement).critics.risk).toEqual({ x: 700, y: 320 });
+    expect(layout(2000, 1000, placement).critics.risk).toEqual({ x: 1400, y: 400 });
   });
 
-  it("keeps a dragged node clear of the stage's edges and the status line", () => {
-    expect(clampToStage(1440, 900, { x: -50, y: 10 })).toEqual({ x: 28, y: 40 });
-    expect(clampToStage(1440, 900, { x: 5000, y: 5000 })).toEqual({ x: 1412, y: 828 });
-    expect(layout(1440, 900, { idea: { fx: 0, fy: 1 } }).idea).toEqual({ x: 28, y: 828 });
+  it("keeps a dragged critic clear of the stage's edges, the inlet and the outlet", () => {
+    expect(clampToStage(1440, 900, { x: -50, y: 10 })).toEqual({ x: 28, y: 140 });
+    expect(clampToStage(1440, 900, { x: 5000, y: 5000 })).toEqual({ x: 1412, y: 718 });
+    const l = layout(1440, 900, { market: { fx: 0, fy: 0 }, technical: { fx: 1, fy: 1 } });
+    expect(l.critics.market.y).toBeGreaterThan(l.inlet.y + CAPSULE_HEIGHT / 2);
+    expect(l.critics.technical.y).toBeLessThan(l.outlet.y - CAPSULE_HEIGHT / 2);
+  });
+
+  it("keeps the idea and the verdict where the flow enters and leaves, whatever is saved", () => {
+    const plain = layout(1440, 900);
+    const saved = layout(1440, 900, { idea: { fx: 0, fy: 1 }, combiner: { fx: 0.1, fy: 0.1 } });
+    expect(saved.idea).toEqual(plain.idea);
+    expect(saved.combiner).toEqual(plain.combiner);
+    expect(plain.idea).toEqual({ x: 720, y: 28 + CAPSULE_HEIGHT / 2 });
+  });
+
+  it("pours each critic's streams out of the inlet's lower edge and into the outlet's upper edge", () => {
+    const l = layout(1440, 900);
+    const starts = CRITICS.map((c) => curve(l, `in:${c}`).p0);
+    const ends = CRITICS.map((c) => curve(l, `out:${c}`).p3);
+    for (const p of starts) expect(p.y).toBe(l.inlet.y + CAPSULE_HEIGHT / 2);
+    for (const p of ends) expect(p.y).toBe(l.outlet.y - CAPSULE_HEIGHT / 2);
+    // Spread along the capsules in the critics' order, within the capsules' width.
+    const xs = starts.map((p) => p.x);
+    expect([...xs].sort((a, b) => a - b)).toEqual(xs);
+    expect(Math.min(...xs)).toBeGreaterThan(l.inlet.x - l.inlet.width / 2);
+    expect(Math.max(...xs)).toBeLessThan(l.inlet.x + l.inlet.width / 2);
+  });
+
+  it("fits the capsules inside a phone's width", () => {
+    const l = layout(375, 760);
+    expect(l.compact).toBe(true);
+    expect(l.inlet.width).toBeLessThanOrEqual(375 - 32);
+    expect(l.outlet.width).toBe(l.inlet.width);
   });
 
   it("runs the panel top to bottom: the idea above the critics' row, the verdict below", () => {

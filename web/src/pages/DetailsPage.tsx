@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router";
 import type { CriticRecord, PanelRecord, RunDetail } from "../api";
+import { Chevron } from "../Chevron";
 import { formatSeconds } from "../flow/timeline";
 import { CRITIC_TITLES, durationBetween, formatCost, formatTokens, formatWhen, modelName } from "../format";
 import { IdeaText, type Mark } from "../IdeaText";
 import { findQuote } from "../quotes";
 
 /** Each critic's issues beside the idea, with the quoted words marked, then where the
- * run came from. A point on the verdict links here by its issue's id. */
+ * run came from. An issue shows its headline; why it matters and how to improve it open
+ * on a click. A point on the verdict links here by its issue's id, and opens it. */
 export function RunDetails({ run }: { run: RunDetail }) {
   const { hash } = useLocation();
   const linked = issueFromHash(hash);
@@ -47,7 +49,7 @@ export function RunDetails({ run }: { run: RunDetail }) {
     setPinned(linked);
     const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
     issue.scrollIntoView({ block: "center", behavior });
-    issue.focus({ preventScroll: true });
+    issue.querySelector<HTMLElement>("summary")?.focus({ preventScroll: true });
     // The idea column scrolls on its own on wide screens. Scroll it directly: a second
     // scrollIntoView would also move the window and cancel the scroll to the issue.
     const column = document.querySelector<HTMLElement>(".details-idea");
@@ -94,6 +96,7 @@ export function RunDetails({ run }: { run: RunDetail }) {
                 critic={critic}
                 found={new Set(marks.map((m) => m.id))}
                 active={active}
+                linked={linked}
                 onActive={setPinned}
                 onHover={onHover}
               />
@@ -123,10 +126,12 @@ function CriticSection(props: {
   critic: CriticRecord;
   found: Set<string>;
   active: string | null;
+  /** The issue a point on the verdict linked to, which starts open. */
+  linked: string | null;
   onActive: (id: string | null) => void;
   onHover: (id: string | null) => void;
 }) {
-  const { critic, found, active, onActive, onHover } = props;
+  const { critic, found, active, linked, onActive, onHover } = props;
   const verdict = critic.verdict;
   const ownRating = critic.model_overall && verdict && critic.model_overall !== verdict.overall;
   return (
@@ -161,26 +166,30 @@ function CriticSection(props: {
                   key={id}
                   id={`issue-${id}`}
                   className={`issue${active === id ? " is-active" : ""}`}
-                  tabIndex={0}
                   onMouseEnter={() => onHover(id)}
                   onMouseLeave={() => onHover(null)}
                   onFocus={() => onActive(id)}
                   onBlur={() => onActive(null)}
                 >
-                  <p className="issue-head">
-                    <span className={`tag mono${issue.severity === "fatal" ? " tag--fatal" : ""}`}>{issue.severity}</span>
-                    <span className="issue-text">{issue.issue}</span>
-                  </p>
-                  <p className="issue-why">{issue.why_it_matters}</p>
-                  <p className="issue-fix">
-                    <span className="issue-fix-label">To improve:</span> {issue.how_to_improve}
-                  </p>
-                  {(capped || !found.has(id)) && (
-                    <p className="issue-notes mono">
-                      {capped && <span>lowered from fatal: the critic called it fixable</span>}
-                      {!found.has(id) && <span>its quote is not word for word in the idea</span>}
-                    </p>
-                  )}
+                  <details className="issue-details" open={id === linked || undefined}>
+                    <summary className="issue-head">
+                      <span className={`tag mono${issue.severity === "fatal" ? " tag--fatal" : ""}`}>{issue.severity}</span>
+                      <span className="issue-text">{issue.issue}</span>
+                      <Chevron />
+                    </summary>
+                    <div className="issue-body">
+                      <p className="issue-why">{issue.why_it_matters}</p>
+                      <p className="issue-fix">
+                        <span className="issue-fix-label">To improve:</span> {issue.how_to_improve}
+                      </p>
+                      {(capped || !found.has(id)) && (
+                        <p className="issue-notes mono">
+                          {capped && <span>lowered from fatal: the critic called it fixable</span>}
+                          {!found.has(id) && <span>its quote is not word for word in the idea</span>}
+                        </p>
+                      )}
+                    </div>
+                  </details>
                 </li>
               );
             })}
@@ -241,9 +250,12 @@ function Provenance({ record, runId }: { record: PanelRecord; runId: string }) {
     s.statement_repaired ? "statement rewritten once" : "statement as first written",
   ];
   return (
-    <footer className="provenance">
-      <h2>Where this run came from</h2>
-      <dl>
+    <details className="provenance disclosure">
+      <summary>
+        <h2>Where this run came from</h2>
+        <Chevron />
+      </summary>
+      <dl className="disclosure-body">
         {rows.map(([term, value]) => (
           <div key={term}>
             <dt>{term}</dt>
@@ -265,6 +277,6 @@ function Provenance({ record, runId }: { record: PanelRecord; runId: string }) {
           <dd className="mono">{checks.join(" · ")}</dd>
         </div>
       </dl>
-    </footer>
+    </details>
   );
 }

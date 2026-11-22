@@ -109,11 +109,17 @@ code {
 .start-intro {
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 24px;
 }
 
+/* Past runs fold into the corner opposite the form, opening downwards. */
 .start .past-runs {
-  padding-top: 10px;
+  padding-top: 6px;
+}
+
+.start .past-runs > summary {
+  display: flex;
+  margin-left: auto;
 }
 
 .start-intro h1 {
@@ -127,14 +133,312 @@ code {
 
 .start-lede {
   color: var(--ink-2);
-  max-width: 46ch;
+  max-width: 40ch;
   font-size: 18px;
+  margin-top: -6px;
 }
 
 .start-form {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 26px;
+  margin-top: 10px;
+}
+
+/* ---------- Disclosures: explanations folded away until asked for ---------- */
+
+.chevron {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 220ms var(--ease-out);
+}
+
+details[open] > summary .chevron {
+  transform: rotate(180deg);
+}
+
+.disclosure > summary,
+.issue-details > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.disclosure > summary::-webkit-details-marker,
+.issue-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.disclosure > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  font-size: 15px;
+  color: var(--ink-2);
+  transition: color 160ms ease;
+}
+
+.disclosure[open] > summary {
+  color: var(--ink);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .disclosure > summary:hover {
+    color: var(--ink);
+  }
+}
+
+.disclosure-body {
+  padding-top: 14px;
+  color: var(--ink-2);
+  font-size: 16px;
+}
+
+/* Where the browser can, a disclosure opens and closes by sliding its height. */
+@supports selector(::details-content) {
+  .disclosure,
+  .issue-details {
+    interpolate-size: allow-keywords;
+  }
+  .disclosure::details-content,
+  .issue-details::details-content {
+    block-size: 0;
+    overflow-x: visible;
+    overflow-y: clip;
+    transition:
+      block-size 240ms var(--ease-out),
+      content-visibility 240ms allow-discrete;
+  }
+  /* Opening shows the content at once (only the height slides), so it can take focus
+     straight away; closing keeps it visible until the height has gone. */
+  .disclosure[open]::details-content,
+  .issue-details[open]::details-content {
+    block-size: auto;
+    transition: block-size 240ms var(--ease-out);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chevron,
+  .disclosure::details-content,
+  .issue-details::details-content {
+    transition: none;
+  }
+}
+
+.how-it-works {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 54ch;
+}
+
+.angle-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.angle-list li {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: baseline;
+}
+
+.angle-list .critic-dot {
+  color: var(--critic);
+  align-self: center;
+}
+
+.angle-title {
+  color: var(--ink);
+}
+
+.angle-text {
+  grid-column: 2;
+  font-size: 15px;
+  color: var(--ink-3);
+}
+
+/* ---------- The idea and the models switch ---------- */
+
+.field {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.field-label {
+  padding: 0;
+  margin-bottom: 8px;
+  font-size: 15px;
+  color: var(--ink-3);
+}
+
+.idea-field > :not(.field-label) {
+  align-self: stretch;
+}
+
+.samples {
+  margin-top: 16px;
+}
+
+.samples .idea-choices {
+  padding-top: 8px;
+}
+
+/* A chosen sample stands where the writing fields would be. */
+.sample-chosen {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 13px 18px;
+  border: 1px solid var(--hair);
+  border-radius: 12px;
+  background: var(--ground-raised);
+}
+
+.sample-chosen-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin-right: auto;
+}
+
+.sample-chosen-title {
+  font-size: 17px;
+  color: var(--ink);
+}
+
+.sample-chosen-meta {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.sample-chosen .text-button {
+  flex: none;
+  font-size: 15px;
+}
+
+.segmented {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  padding: 3px;
+  border: 1px solid var(--hair);
+  border-radius: 12px;
+  background: var(--ground-raised);
+}
+
+.segment {
+  position: relative;
+  padding: 8px 26px;
+  border-radius: 9px;
+  text-align: center;
+  font-size: 16px;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition:
+    background-color 180ms ease,
+    color 180ms ease;
+}
+
+.segment input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.segment:has(input:checked) {
+  background: rgba(236, 232, 225, 0.13);
+  color: var(--ink);
+}
+
+.segment:has(input:focus-visible) {
+  outline: 1.5px solid var(--ink);
+  outline-offset: 2px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .segment:hover {
+    color: var(--ink);
+  }
+}
+
+.field-hint {
+  margin: 10px 0 12px;
+  font-size: 15px;
+  color: var(--ink-3);
+}
+
+.lineup-table {
+  border-collapse: collapse;
+  font-size: 15px;
+}
+
+.lineup-table th,
+.lineup-table td {
+  padding: 7px 28px 7px 0;
+  text-align: left;
+  font-weight: 400;
+  border-top: 1px solid var(--hair);
+}
+
+.lineup-table thead th {
+  border-top: 0;
+  padding-top: 0;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.lineup-table tbody th {
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.lineup-table tbody .critic-dot {
+  color: var(--critic);
+  margin-right: 4px;
+}
+
+.lineup-table .critic-dot.is-blank {
+  visibility: hidden;
+}
+
+.lineup-table td {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.lineup-table :is(th, td):last-child {
+  padding-right: 0;
+}
+
+/* On a phone the step names wrap, so the table keeps inside the screen. */
+@media (max-width: 520px) {
+  .lineup-table th,
+  .lineup-table td {
+    padding-right: 14px;
+  }
+  .lineup-table tbody th {
+    white-space: normal;
+  }
 }
 
 .idea-choices {
@@ -285,17 +589,15 @@ code {
   font-size: 15px;
 }
 
-.past-runs h2 {
-  font-size: 15px;
-  font-weight: 400;
+.past-runs-count {
+  font-size: 13px;
   color: var(--ink-3);
-  margin-bottom: 8px;
 }
 
 .past-runs ul {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 14px 0 0;
 }
 
 .past-runs li {
@@ -350,12 +652,12 @@ code {
 /* Nodes are big enough to read across a room and to click: critics 30 px, the idea and
    the verdict, where every stream starts and ends, 38 px. */
 .node {
-  --ring: 30px;
+  --ring: 34px;
 }
 
 .node--idea,
 .node--combiner {
-  --ring: 38px;
+  --ring: 40px;
 }
 
 .node-ring {
@@ -376,6 +678,46 @@ code {
 
 .node-ring[data-state="working"] {
   border-color: var(--critic);
+}
+
+/* Each node's mark sits in its ring: drawn in the step's colour while it waits or
+   works, and cut out of the filled disc in the ground's colour once it has answered. */
+.node-ring {
+  display: grid;
+  place-items: center;
+  color: var(--critic);
+}
+
+.node-icon {
+  width: 56%;
+  height: 56%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  overflow: visible;
+}
+
+.node-icon .is-solid {
+  fill: currentColor;
+  stroke: none;
+}
+
+.node-icon .is-faint {
+  opacity: 0.55;
+}
+
+.node-ring[data-state="waiting"] {
+  color: color-mix(in srgb, var(--critic) 72%, var(--ground));
+}
+
+.node-ring[data-state="done"] {
+  color: var(--ground);
+}
+
+.node-ring[data-state="failed"] {
+  color: var(--ink-3);
 }
 
 .node-ring[data-state="working"]::after {
@@ -558,6 +900,167 @@ code {
 .is-resting .node-title {
   font-size: 16px;
   color: var(--ink-2);
+}
+
+/* ---------- The inlet, the outlet and the panel band ---------- */
+
+/* The idea's inlet across the top of the panel and the verdict's outlet near the
+   bottom: capsules, not nodes, because the flow enters and leaves through them. The
+   inlet is filled in warm ink from the start; the outlet waits as a dashed outline,
+   takes an ink edge while the verdict is written, and fills once it is. */
+.port {
+  position: absolute;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 24px 0 9px;
+  border-radius: 999px;
+  border: 1.5px solid var(--hair-strong);
+  background: var(--ground);
+  color: var(--ink);
+  pointer-events: auto;
+  cursor: pointer;
+  outline: none;
+  transition:
+    background-color 500ms var(--ease-out),
+    border-color 500ms var(--ease-out),
+    color 500ms var(--ease-out);
+}
+
+.port-mark {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--ink);
+  color: var(--ground);
+  transition:
+    background-color 500ms var(--ease-out),
+    color 500ms var(--ease-out);
+}
+
+.port-mark .node-icon {
+  width: 22px;
+  height: 22px;
+}
+
+.port-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.port-title {
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.port-meta {
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: color-mix(in srgb, currentColor 68%, transparent);
+}
+
+.port--inlet,
+.port--outlet[data-state="done"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--ground);
+}
+
+.port--inlet .port-mark,
+.port--outlet[data-state="done"] .port-mark {
+  background: var(--ground);
+  color: var(--ink);
+}
+
+.port--outlet[data-state="waiting"] {
+  border-style: dashed;
+  color: var(--ink-2);
+}
+
+.port--outlet[data-state="waiting"] .port-mark {
+  background: transparent;
+  color: var(--ink-2);
+  box-shadow: inset 0 0 0 1.5px var(--hair-strong);
+}
+
+.port--outlet[data-state="working"] {
+  border-color: var(--ink);
+}
+
+.port--outlet[data-state="working"]::after {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  border-radius: inherit;
+  border: 1px solid var(--ink);
+  opacity: 0;
+  animation: port-out 1.8s var(--ease-out) infinite;
+}
+
+@keyframes port-out {
+  from {
+    transform: scale(0.98);
+    opacity: 0.6;
+  }
+  to {
+    transform: scale(1.04);
+    opacity: 0;
+  }
+}
+
+.port--outlet[data-state="failed"] {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--fatal) 70%, transparent);
+}
+
+.port:focus-visible,
+.port.is-open {
+  box-shadow:
+    0 0 0 4px var(--ground),
+    0 0 0 5.5px var(--ink);
+}
+
+.is-resting .port {
+  cursor: default;
+}
+
+/* The four critics work in one band across the middle: a quiet lane, a hairline and the
+   faintest lift, so they read as a group between the inlet and the outlet. */
+.panel-band {
+  position: absolute;
+  left: clamp(12px, 3vw, 40px);
+  right: clamp(12px, 3vw, 40px);
+  border: 1px solid var(--hair);
+  border-radius: 20px;
+  background: rgba(236, 232, 225, 0.022);
+  pointer-events: none;
+}
+
+.panel-band-label {
+  position: absolute;
+  left: 18px;
+  top: 12px;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .port--outlet[data-state="working"]::after {
+    animation: none;
+    opacity: 0.4;
+  }
 }
 
 /* ---------- A node's card ---------- */
@@ -905,7 +1408,7 @@ code {
 .verdict-rest {
   font-size: 18px;
   color: var(--ink-2);
-  max-width: 66ch;
+  max-width: 58ch;
   text-wrap: pretty;
   animation: rise 700ms var(--ease-out) 950ms both;
 }
@@ -1180,7 +1683,7 @@ code {
   margin-top: 14px;
   color: var(--ink-2);
   font-size: 17px;
-  max-width: 64ch;
+  max-width: 58ch;
 }
 
 .critic-error {
@@ -1222,14 +1725,27 @@ code {
   background: var(--ground-raised);
 }
 
-.issue:focus-visible {
-  outline-offset: -1px;
-}
-
 .issue-head {
   display: flex;
   align-items: baseline;
   gap: 12px;
+}
+
+.issue-head .chevron {
+  margin-left: auto;
+  align-self: center;
+  color: var(--ink-3);
+}
+
+.issue-head:focus-visible {
+  outline-offset: 6px;
+}
+
+.issue-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
 }
 
 .issue-text {
@@ -1242,6 +1758,7 @@ code {
 .issue-fix {
   font-size: 16px;
   color: var(--ink-2);
+  max-width: 60ch;
 }
 
 .issue-fix-label {
@@ -1265,12 +1782,13 @@ code {
 .provenance h2 {
   font-size: 15px;
   font-weight: 400;
-  color: var(--ink-3);
-  margin-bottom: 14px;
+  color: inherit;
+  margin: 0;
 }
 
 .provenance dl {
   margin: 0;
+  padding-top: 18px;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
   gap: 10px 40px;
@@ -1300,6 +1818,10 @@ code {
 @media (max-width: 900px) {
   .start {
     grid-template-columns: minmax(0, 1fr);
+  }
+  /* One column: past runs come after the form, folded like the other explanations. */
+  .start .past-runs > summary {
+    margin-left: 0;
   }
   .stage-section {
     height: max(600px, 92svh);

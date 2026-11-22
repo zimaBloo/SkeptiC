@@ -15,12 +15,25 @@ export interface Curve {
   p3: Point;
 }
 
+/** A capsule's centre and size: the idea's inlet at the top of the stage, the verdict's
+ * outlet near the bottom. */
+export interface Capsule extends Point {
+  width: number;
+  height: number;
+}
+
 export interface Layout {
   width: number;
   height: number;
+  /** The centre of the idea's inlet. */
   idea: Point;
   critics: Record<CriticName, Point>;
+  /** The centre of the verdict's outlet. */
   combiner: Point;
+  inlet: Capsule;
+  outlet: Capsule;
+  /** The height of the critics' row before any is dragged. */
+  row: number;
   /** Half the width of a stream at its widest, in px. */
   spread: number;
   /** Narrow screens: the critics sit close together, so their labels go below them. */
@@ -34,14 +47,27 @@ export type NodeId = "idea" | CriticName | "combiner";
  * height, so an arrangement keeps its shape when the window is resized. */
 export type Placement = Partial<Record<NodeId, { fx: number; fy: number }>>;
 
-/** Margins a dragged node keeps from the stage's edges, with room for its label. */
-const EDGE = { side: 28, top: 40, bottom: 72 };
+/** The inlet and outlet: their height, and their distance from the stage's edges. The
+ * outlet leaves room below it for the status line, which wraps to three lines on a phone. */
+export const CAPSULE_HEIGHT = 56;
+const INLET_TOP = 28;
+const outletBottom = (width: number) => (isCompact(width) ? 140 : 76);
+
+/** Narrow screens: the critics sit close together, so their labels go below them. */
+const isCompact = (width: number) => width < 720;
+
+/** Margins a dragged critic keeps from the stage's edges: clear of the inlet above and the
+ * outlet below, with room for its label. */
+function edges(width: number) {
+  return { side: 28, top: INLET_TOP + CAPSULE_HEIGHT + 56, bottom: outletBottom(width) + CAPSULE_HEIGHT + 50 };
+}
 
 /** A point kept inside the stage's margins. */
 export function clampToStage(width: number, height: number, point: Point): Point {
+  const edge = edges(width);
   return {
-    x: Math.min(Math.max(point.x, EDGE.side), Math.max(EDGE.side, width - EDGE.side)),
-    y: Math.min(Math.max(point.y, EDGE.top), Math.max(EDGE.top, height - EDGE.bottom)),
+    x: Math.min(Math.max(point.x, edge.side), Math.max(edge.side, width - edge.side)),
+    y: Math.min(Math.max(point.y, edge.top), Math.max(edge.top, height - edge.bottom)),
   };
 }
 
@@ -53,30 +79,55 @@ export const STREAMS: StreamId[] = [
   ...CRITICS.map((c) => `out:${c}` as const),
 ];
 
-/** The panel top to bottom: the idea above, the four critics in a row, the verdict
- * below, as the page itself reads. */
+/** The panel top to bottom: the idea's inlet across the top, the four critics in a row,
+ * the verdict's outlet near the bottom, as the page itself reads. Only critics move when
+ * dragged: the inlet and the outlet are where the flow enters and leaves. */
 export function layout(width: number, height: number, placement: Placement = {}): Layout {
-  const compact = width < 720;
+  const compact = isCompact(width);
+  const capsuleWidth = compact ? Math.max(200, width - 32) : Math.min(560, Math.max(320, width * 0.44));
+  const inlet = { x: width / 2, y: INLET_TOP + CAPSULE_HEIGHT / 2, width: capsuleWidth, height: CAPSULE_HEIGHT };
+  const outlet = {
+    x: width / 2,
+    y: height - outletBottom(width) - CAPSULE_HEIGHT / 2,
+    width: capsuleWidth,
+    height: CAPSULE_HEIGHT,
+  };
   const left = width * (compact ? 0.13 : 0.16);
   const right = width * (compact ? 0.87 : 0.84);
-  const row = height * 0.5;
+  const row = (inlet.y + CAPSULE_HEIGHT / 2 + outlet.y - CAPSULE_HEIGHT / 2) / 2;
   const critics = Object.fromEntries(
     CRITICS.map((critic, i) => [critic, { x: left + ((right - left) * i) / (CRITICS.length - 1), y: row }]),
   ) as Record<CriticName, Point>;
-  const placed = (id: NodeId, slot: Point): Point => {
+  const placed = (id: CriticName, slot: Point): Point => {
     const moved = placement[id];
     return moved ? clampToStage(width, height, { x: moved.fx * width, y: moved.fy * height }) : slot;
   };
   return {
     width,
     height,
-    idea: placed("idea", { x: width / 2, y: height * 0.14 }),
+    idea: { x: inlet.x, y: inlet.y },
     critics: Object.fromEntries(
       CRITICS.map((critic) => [critic, placed(critic, critics[critic])]),
     ) as Record<CriticName, Point>,
-    combiner: placed("combiner", { x: width / 2, y: height * 0.84 }),
+    combiner: { x: outlet.x, y: outlet.y },
+    inlet,
+    outlet,
+    row,
     spread: Math.max(8, Math.min(width * 0.022, compact ? 14 : 30)),
     compact,
+  };
+}
+
+/** Where a critic's streams leave the inlet and reach the outlet: spread along the
+ * capsule's edge in the critics' order, so the flow pours out of the idea and into the
+ * verdict rather than out of and into one point. */
+export function port(l: Layout, critic: CriticName, end: "inlet" | "outlet"): Point {
+  const capsule = end === "inlet" ? l.inlet : l.outlet;
+  const i = CRITICS.indexOf(critic);
+  const offset = ((i - (CRITICS.length - 1) / 2) / ((CRITICS.length - 1) / 2)) * capsule.width * 0.3;
+  return {
+    x: capsule.x + offset,
+    y: end === "inlet" ? capsule.y + capsule.height / 2 : capsule.y - capsule.height / 2,
   };
 }
 
@@ -96,28 +147,29 @@ export function labelSide(l: Layout, critic: CriticName): "above" | "below" {
   return l.critics[critic].y <= l.combiner.y ? "below" : "above";
 }
 
-/** The curve a stream follows. Streams fall from the idea and arrive at their critic
- * from above; streams to the verdict leave downwards and gather into it. */
+/** The curve a stream follows. Streams fall from the inlet's lower edge and arrive at
+ * their critic from above; streams to the verdict leave downwards and pour into the
+ * outlet's upper edge. */
 export function curve(l: Layout, stream: StreamId): Curve {
   const [direction, critic] = stream.split(":") as ["in" | "out", CriticName];
   const node = l.critics[critic];
   if (direction === "in") {
-    const dx = node.x - l.idea.x;
-    const dy = node.y - l.idea.y;
+    const start = port(l, critic, "inlet");
+    const dy = node.y - start.y;
     return {
-      p0: l.idea,
-      p1: { x: l.idea.x + dx * 0.12, y: l.idea.y + dy * 0.62 },
+      p0: start,
+      p1: { x: start.x, y: start.y + dy * 0.5 },
       p2: { x: node.x, y: node.y - dy * 0.5 },
       p3: node,
     };
   }
-  const dx = l.combiner.x - node.x;
-  const dy = l.combiner.y - node.y;
+  const end = port(l, critic, "outlet");
+  const dy = end.y - node.y;
   return {
     p0: node,
     p1: { x: node.x, y: node.y + dy * 0.5 },
-    p2: { x: l.combiner.x - dx * 0.12, y: l.combiner.y - dy * 0.62 },
-    p3: l.combiner,
+    p2: { x: end.x, y: end.y - dy * 0.5 },
+    p3: end,
   };
 }
 
