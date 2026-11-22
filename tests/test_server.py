@@ -363,7 +363,9 @@ def test_run_status_follows_the_process_then_its_record(
         "ok": True,
         "issues": 3,
         "overall": "weak",
+        "top_issue": None,
         "error": None,
+        "usage": None,
     }
     assert detail["error"] is None
 

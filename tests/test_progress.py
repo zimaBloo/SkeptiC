@@ -48,17 +48,24 @@ def test_panel_reports_each_step_in_order(tmp_path: Path, monkeypatch: pytest.Mo
         "critic": "market",
         "model": "mockllm/model",
     }
-    assert without_time(written[2]) == {
+    finished = without_time(written[2])
+    usage = finished.pop("usage")
+    assert finished == {
         "event": "critic_finished",
         "critic": "market",
         "ok": True,
         "issues": 1,
         "overall": "promising",
+        "top_issue": "A market problem.",
         "error": None,
     }
+    # The mock model reports tokens but, unlike OpenRouter, no cost.
+    assert usage["output_tokens"] is not None and usage["cost"] is None
     assert [e["critic"] for e in written if e["event"] == "critic_finished"] == list(CRITICS)
     assert without_time(written[-3]) == {"event": "combiner_started", "model": "mockllm/model"}
-    assert without_time(written[-2]) == {
+    combined = without_time(written[-2])
+    assert combined.pop("usage") is not None
+    assert combined == {
         "event": "combiner_finished",
         "ok": True,
         "points": 1,

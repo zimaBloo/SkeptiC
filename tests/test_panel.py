@@ -599,3 +599,16 @@ def test_idea_id_option_names_the_sample(tmp_path: Path) -> None:
     log, _ = run_panel(tmp_path, task_args={"idea_id": "shelfsense"})
 
     assert only_sample(log).id == "shelfsense"
+
+
+def test_usage_of_several_calls_adds_up_and_keeps_unknown_costs_unknown() -> None:
+    from skeptic.panel import CallUsage, total_usage
+
+    first = CallUsage(input_tokens=100, output_tokens=50, cost=0.01)
+    second = CallUsage(input_tokens=40, output_tokens=10, cost=None)
+    total = total_usage(first, None, second)
+
+    assert total is not None
+    assert (total.input_tokens, total.output_tokens, total.cost) == (140, 60, 0.01)
+    assert total_usage(None, None) is None
+    assert total_usage(CallUsage(input_tokens=5)) == CallUsage(input_tokens=5)

@@ -23,6 +23,17 @@ class Event(BaseModel):
     time: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class Usage(BaseModel):
+    """Tokens and cost of a step's model calls, as far as the provider reports them."""
+
+    input_tokens: int | None = None
+    output_tokens: int | None = Field(default=None, description="Reasoning tokens included.")
+    reasoning_tokens: int | None = None
+    cost: float | None = Field(
+        default=None, description="Dollars, as the provider billed them (OpenRouter only)."
+    )
+
+
 class RunStarted(Event):
     event: Literal["run_started"] = "run_started"
     critics: list[CriticName] = Field(description="The critics, in the panel's order.")
@@ -44,7 +55,9 @@ class CriticFinished(Event):
     ok: bool = Field(description="The critic returned a usable verdict.")
     issues: int | None = Field(description="How many issues the verdict lists.")
     overall: Overall | None = Field(description="The overall rating after the severity rules.")
+    top_issue: str | None = Field(default=None, description="The critic's most serious issue.")
     error: str | None
+    usage: Usage | None = None
 
 
 class CombinerStarted(Event):
@@ -63,6 +76,7 @@ class CombinerFinished(Event):
     ok: bool
     points: int | None = Field(description="How many points the combined verdict has.")
     error: str | None
+    usage: Usage | None = None
 
 
 class RunFinished(Event):

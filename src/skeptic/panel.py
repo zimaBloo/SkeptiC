@@ -26,6 +26,8 @@ import httpx
 import openai
 from inspect_ai import Task, task
 from inspect_ai.dataset import Sample
+from inspect_ai.event import ModelEvent
+from inspect_ai.log import transcript
 from inspect_ai.model import (
     ChatMessage,
     ChatMessageAssistant,
@@ -87,6 +89,7 @@ from skeptic.progress import (
     RepairStarted,
     RunFinished,
     RunStarted,
+    Usage,
 )
 from skeptic.verdict import (
     CriticVerdict,
@@ -131,7 +134,11 @@ class CallUsage(BaseModel):
     input_tokens: int | None = Field(
         default=None, description="Prompt tokens, including any the server read from cache."
     )
-    output_tokens: int | None = None
+    output_tokens: int | None = Field(default=None, description="Reasoning tokens included.")
+    reasoning_tokens: int | None = None
+    cost: float | None = Field(
+        default=None, description="Dollars, as the provider billed them (OpenRouter only)."
+    )
     stop_reason: str | None = None
     near_context_limit: bool = Field(
         default=False,
@@ -288,7 +295,11 @@ def panel(
                     ok=found.verdict is not None,
                     issues=len(found.verdict.issues) if found.verdict else None,
                     overall=found.verdict.overall if found.verdict else None,
+                    top_issue=found.verdict.issues[0].issue
+                    if found.verdict and found.verdict.issues
+                    else None,
                     error=found.error,
+                    usage=progress_usage(total_usage(found.usage, found.retry_usage)),
                 )
             )
 
@@ -321,11 +332,20 @@ def panel(
         )
         output = await model.generate(messages, config=config)
         result.combiner_served = await served_model(model)
-        result.combiner_usage = call_usage(output, result.combiner_served)
+        result.combiner_usage = call_usage(
+            output, result.combiner_served, last_call_cost("combiner")
+        )
+
+        def combiner_usage() -> Usage | None:
+            return progress_usage(
+                total_usage(result.combiner_usage, result.combiner_retry_usage, result.repair_usage)
+            )
 
         def combiner_failed(failure: str, cause: Exception) -> NoReturn:
             result.combiner_error = failure
-            progress.write(CombinerFinished(ok=False, points=None, error=failure))
+            progress.write(
+                CombinerFinished(ok=False, points=None, error=failure, usage=combiner_usage())
+            )
             raise VerdictParseError(failure) from cause
 
         try:
@@ -343,7 +363,9 @@ def panel(
                 ChatMessageUser(content=format_repair_prompt(str(error))),
             ]
             output = await model.generate(messages, config=config)
-            result.combiner_retry_usage = call_usage(output, result.combiner_served)
+            result.combiner_retry_usage = call_usage(
+                output, result.combiner_served, last_call_cost("combiner")
+            )
             try:
                 reply, extracted = parse_combined(output.completion)
             except VerdictParseError as again:
@@ -368,7 +390,9 @@ def panel(
                 ],
                 config=generation_config(model, "statement_repair", repair_json_schema(), settings),
             )
-            result.repair_usage = call_usage(repair, result.combiner_served)
+            result.repair_usage = call_usage(
+                repair, result.combiner_served, last_call_cost("combiner")
+            )
             try:
                 repaired = parse_repair(repair.completion)
                 if not is_complete_sentence(repaired.statement):
@@ -386,7 +410,11 @@ def panel(
                 result.combined = combined
                 result.combined_checks = check_combined(combined, verdicts)
 
-        progress.write(CombinerFinished(ok=True, points=len(combined.points), error=None))
+        progress.write(
+            CombinerFinished(
+                ok=True, points=len(combined.points), error=None, usage=combiner_usage()
+            )
+        )
         state.output = ModelOutput.from_content(model=str(model), content=combined.statement)
         return state
 
@@ -425,7 +453,10 @@ async def run_critic(critic: CriticName, idea: str, settings: Settings) -> Criti
         return CriticResult(critic=critic, model=str(model), error=failed)
     served = await served_model(model)
     result = CriticResult(
-        critic=critic, model=str(model), served=served, usage=call_usage(output, served)
+        critic=critic,
+        model=str(model),
+        served=served,
+        usage=call_usage(output, served, last_call_cost(critic)),
     )
     try:
         parsed = parse_verdict(output.completion)
@@ -448,7 +479,7 @@ async def run_critic(critic: CriticName, idea: str, settings: Settings) -> Criti
         except REFUSALS as refused:
             result.error = f"{error}; asking again failed: {refusal_reason(refused)}"
             return result
-        result.retry_usage = call_usage(retry, served)
+        result.retry_usage = call_usage(retry, served, last_call_cost(critic))
         try:
             parsed = parse_verdict(retry.completion)
         except VerdictParseError as again:
@@ -518,10 +549,12 @@ def is_ollama(model: Model) -> bool:
     return str(model).startswith("ollama/")
 
 
-def call_usage(output: ModelOutput, served: ServedModel | None) -> CallUsage:
+def call_usage(
+    output: ModelOutput, served: ServedModel | None, cost: float | None = None
+) -> CallUsage:
     usage = output.usage
     if usage is None:
-        return CallUsage(stop_reason=output.stop_reason)
+        return CallUsage(stop_reason=output.stop_reason, cost=cost)
     # Inspect counts cached prompt tokens apart from input_tokens.
     prompt = (
         usage.input_tokens
@@ -532,9 +565,57 @@ def call_usage(output: ModelOutput, served: ServedModel | None) -> CallUsage:
     return CallUsage(
         input_tokens=prompt,
         output_tokens=usage.output_tokens,
+        reasoning_tokens=usage.reasoning_tokens,
+        cost=cost if cost is not None else usage.total_cost,
         stop_reason=output.stop_reason,
         near_context_limit=window is not None
         and prompt + usage.output_tokens >= CONTEXT_WARNING_SHARE * window,
+    )
+
+
+def last_call_cost(role: str) -> float | None:
+    """What the provider billed for the role's latest call, if it says so.
+
+    OpenRouter puts the cost of each call in its reply's usage; Inspect keeps the
+    raw reply in the transcript but not on the output.
+    """
+    for event in reversed(transcript().events):
+        if isinstance(event, ModelEvent) and event.role == role:
+            response = event.call.response if event.call else None
+            usage = response.get("usage") if isinstance(response, dict) else None
+            cost = usage.get("cost") if isinstance(usage, dict) else None
+            return float(cost) if isinstance(cost, int | float) else None
+    return None
+
+
+def total_usage(*usages: CallUsage | None) -> CallUsage | None:
+    """The sum of several calls' usage; None when there was no call."""
+    present = [u for u in usages if u is not None]
+    if not present:
+        return None
+
+    def add(values: list[int | None] | list[float | None]) -> Any:
+        known = [v for v in values if v is not None]
+        return sum(known) if known else None
+
+    return CallUsage(
+        input_tokens=add([u.input_tokens for u in present]),
+        output_tokens=add([u.output_tokens for u in present]),
+        reasoning_tokens=add([u.reasoning_tokens for u in present]),
+        cost=add([u.cost for u in present]),
+        stop_reason=present[-1].stop_reason,
+        near_context_limit=any(u.near_context_limit for u in present),
+    )
+
+
+def progress_usage(usage: CallUsage | None) -> Usage | None:
+    if usage is None:
+        return None
+    return Usage(
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        reasoning_tokens=usage.reasoning_tokens,
+        cost=usage.cost,
     )
 
 

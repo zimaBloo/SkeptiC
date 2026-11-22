@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, ValidationError
 from skeptic.checks import CombinedChecks, VerdictChecks
 from skeptic.combine import CombinedVerdict
 from skeptic.critics import CRITICS, TITLES, CriticName
-from skeptic.panel import RECORD_FORMAT, PanelResult, ServedModel
+from skeptic.panel import RECORD_FORMAT, CallUsage, PanelResult, ServedModel, total_usage
 from skeptic.verdict import CriticVerdict, Overall
 
 # 2: points cite critic issue ids, and the panel works out their severity.
@@ -51,6 +51,9 @@ class CriticRecord(BaseModel):
         default=False,
         description="The first reply was not valid JSON, so the critic was asked once more.",
     )
+    usage: CallUsage | None = Field(
+        default=None, description="Tokens and cost of the critic's calls; missing in older runs."
+    )
     error: str | None = None
 
 
@@ -63,6 +66,10 @@ class CombinerRecord(BaseModel):
     format_retried: bool = Field(
         default=False,
         description="The first reply was not valid JSON, so the combiner was asked once more.",
+    )
+    usage: CallUsage | None = Field(
+        default=None,
+        description="Tokens and cost of the combiner's calls; missing in older runs.",
     )
     error: str | None = None
     repair_error: str | None = Field(
@@ -141,6 +148,7 @@ def record_from_log(log: EvalLog | str | Path) -> PanelRecord:
                 capped=found.capped if found else [],
                 checks=found.checks if found else None,
                 format_retried=found.format_retried if found else False,
+                usage=total_usage(found.usage, found.retry_usage) if found else None,
                 error=found.error if found else "the run stopped before this critic answered",
             )
         )
@@ -171,6 +179,9 @@ def record_from_log(log: EvalLog | str | Path) -> PanelRecord:
             combined=result.combined,
             checks=result.combined_checks,
             format_retried=result.combiner_format_retried,
+            usage=total_usage(
+                result.combiner_usage, result.combiner_retry_usage, result.repair_usage
+            ),
             error=result.combiner_error,
             repair_error=result.repair_error,
         ),
