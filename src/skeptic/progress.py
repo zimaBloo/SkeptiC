@@ -25,8 +25,11 @@ class Event(BaseModel):
 
 class RunStarted(Event):
     event: Literal["run_started"] = "run_started"
-    critics: list[CriticName] = Field(description="The critics, in the order they run.")
+    critics: list[CriticName] = Field(description="The critics, in the panel's order.")
     models: dict[str, str] = Field(description="The model of every role, the combiner included.")
+    parallel: bool = Field(
+        default=False, description="The critics run at the same time, not one after another."
+    )
 
 
 class CriticStarted(Event):

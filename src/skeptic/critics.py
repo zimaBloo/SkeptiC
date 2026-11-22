@@ -40,6 +40,11 @@ def submission_prompt(idea: str) -> str:
     return Template(load_prompt("submission.md")).substitute(idea=idea.strip())
 
 
+def format_repair_prompt(error: str) -> str:
+    """The follow-up message when a reply cannot be read as JSON."""
+    return Template(load_prompt("format_repair.md")).substitute(error=error)
+
+
 def prompts_digest() -> str:
     """SHA-256 over every prompt file, so a run's log shows which prompt text it used."""
     digest = hashlib.sha256()

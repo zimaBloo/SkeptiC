@@ -26,12 +26,21 @@ def test_record_holds_the_idea_every_critic_and_the_combined_verdict(tmp_path: P
     assert all(c.verdict is not None for c in record.critics)
     assert record.combiner.combined is not None
     assert record.prompts_sha256 == prompts_digest()
-    assert record.settings["seed"] == 3
-    assert "idea" not in record.settings
+    assert record.settings == {
+        "lineup": "local",
+        "reasoning": "none",
+        "temperature": 0.0,
+        "seed": 3,
+        "max_tokens": 3000,
+    }
+    assert record.critics_parallel is True
     assert record.scores["critics_answered"] == 4.0
 
 
-def test_record_has_each_calls_timing_in_order(tmp_path: Path) -> None:
+def test_record_has_each_calls_timing_in_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("skeptic.panel.run_together", lambda critics: False)
     log, _ = run_panel(tmp_path)
 
     record = record_from_log(log)
@@ -40,6 +49,19 @@ def test_record_has_each_calls_timing_in_order(tmp_path: Path) -> None:
     assert all(t.started_at is not None and t.finished_at is not None for t in timings)
     starts = [t.started_at for t in timings]
     assert starts == sorted(starts)  # type: ignore[type-var]
+    assert record.critics_parallel is False
+
+
+def test_record_times_critics_that_ran_together_before_the_combiner(tmp_path: Path) -> None:
+    log, _ = run_panel(tmp_path)
+
+    record = record_from_log(log)
+
+    ends = [c.timing.finished_at for c in record.critics]
+    assert all(end is not None for end in ends)
+    combiner_start = record.combiner.timing.started_at
+    assert combiner_start is not None
+    assert all(end <= combiner_start for end in ends if end is not None)
 
 
 def test_record_of_a_failed_run_says_why(tmp_path: Path) -> None:
@@ -51,6 +73,34 @@ def test_record_of_a_failed_run_says_why(tmp_path: Path) -> None:
     assert record.error is not None and "no critic returned a usable verdict" in record.error
     assert all(c.error is not None for c in record.critics)
     assert record.combiner.combined is None
+
+
+def test_run_command_refuses_a_lineup_whose_key_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+    idea = tmp_path / "idea.md"
+    idea.write_text(IDEA, encoding="utf-8")
+
+    code = main(["run", str(idea), "--lineup", "frontier"])
+
+    assert code == 2
+    assert "OPENROUTER_API_KEY" in capsys.readouterr().err
+    assert not (tmp_path / "logs").exists()
+
+
+def test_run_command_refuses_no_reasoning_on_frontier_models(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    idea = tmp_path / "idea.md"
+    idea.write_text(IDEA, encoding="utf-8")
+
+    with pytest.raises(SystemExit) as stopped:
+        main(["run", str(idea), "--lineup", "frontier", "--reasoning", "none"])
+
+    assert stopped.value.code == 2
+    assert "always reason" in capsys.readouterr().err
 
 
 def test_record_survives_a_round_trip_through_json(tmp_path: Path) -> None:

@@ -1,6 +1,7 @@
 """The skeptic command.
 
-    skeptic run IDEA [--out FILE] [--progress FILE] [--idea-id ID] [--role ROLE=MODEL ...]
+    skeptic run IDEA [--lineup NAME] [--reasoning LEVEL] [--max-tokens N]
+                [--role ROLE=MODEL ...] [--out FILE] [--progress FILE] [--idea-id ID]
         Run the panel on an idea file and write the run's record as JSON.
     skeptic export LOG [--out FILE]
         Write the record of an earlier run from its Inspect log.
@@ -10,7 +11,8 @@
         Start the web API (see skeptic.server).
 
 Without --out, the record is written next to the Inspect log, with .json in
-place of .eval.
+place of .eval. API keys are read from the environment or from a .env file in
+the current folder or above it.
 """
 
 import argparse
@@ -23,6 +25,14 @@ import uvicorn
 from inspect_ai import eval as inspect_eval
 from inspect_ai.log import EvalLog
 
+from skeptic.lineups import (
+    LINEUP_NAMES,
+    REASONING_LEVELS,
+    check_reasoning,
+    get_lineup,
+    load_env,
+    missing_key,
+)
 from skeptic.panel import skeptic_panel
 from skeptic.record import PanelRecord, record_from_log, record_json_schema
 from skeptic.server import create_app, serve_hosts
@@ -40,6 +50,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     run.add_argument(
         "--idea-id", metavar="ID", help="the idea's id in the record (default: the file name)"
+    )
+    run.add_argument(
+        "--lineup",
+        choices=LINEUP_NAMES,
+        default="local",
+        help="the models to run on: local ones on this computer (the default), or frontier "
+        "ones hosted by four labs and reached through OpenRouter",
+    )
+    run.add_argument(
+        "--reasoning",
+        choices=REASONING_LEVELS,
+        help="how much the models reason (default: the lineup's level)",
+    )
+    run.add_argument(
+        "--max-tokens",
+        type=int,
+        metavar="N",
+        help="most tokens one reply may use, reasoning included (default: the lineup's limit)",
     )
     run.add_argument(
         "--role",
@@ -88,9 +116,31 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if not args.idea.is_file():
         parser.error(f"no such idea file: {args.idea}")
+    if args.max_tokens is not None and args.max_tokens < 1:
+        parser.error("--max-tokens must be a positive number")
+    try:
+        check_reasoning(get_lineup(args.lineup), args.reasoning or "default")
+    except ValueError as error:
+        parser.error(str(error))
     roles = dict(_parse_role(parser, value) for value in args.role)
+    # The same .env Inspect itself would read; the models are set up before it reads it.
+    load_env(Path.cwd())
+    key = missing_key(get_lineup(args.lineup))
+    if key is not None:
+        print(
+            f"skeptic run: the {args.lineup} lineup needs an API key: put {key}=... in .env",
+            file=sys.stderr,
+        )
+        return 2
     [log] = inspect_eval(
-        skeptic_panel(idea=str(args.idea), idea_id=args.idea_id, progress_file=args.progress),
+        skeptic_panel(
+            idea=str(args.idea),
+            idea_id=args.idea_id,
+            lineup=args.lineup,
+            reasoning=args.reasoning,
+            max_tokens=args.max_tokens,
+            progress_file=args.progress,
+        ),
         model_roles=roles or None,
         log_dir=args.log_dir,
         display="plain",

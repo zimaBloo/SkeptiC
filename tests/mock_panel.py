@@ -7,7 +7,7 @@ from typing import Any
 from inspect_ai import Task
 from inspect_ai import eval as inspect_eval
 from inspect_ai.log import EvalLog, EvalSample
-from inspect_ai.model import ChatMessage, GenerateConfig, ModelOutput, get_model
+from inspect_ai.model import ChatMessage, GenerateConfig, Model, ModelOutput, get_model
 from inspect_ai.tool import ToolChoice, ToolInfo
 
 from skeptic.critics import CRITICS
@@ -78,13 +78,19 @@ class Recorder:
 
 
 def run_panel(
-    tmp_path: Path, task_args: dict[str, Any] | None = None, **replies: str | Recorder
+    tmp_path: Path, task_args: dict[str, Any] | None = None, **replies: str | Recorder | Model
 ) -> tuple[EvalLog, dict[str, Recorder]]:
-    """Run the panel with a mock model per role. Unnamed roles give a valid reply."""
-    defaults: dict[str, str | Recorder] = {critic: verdict(critic) for critic in CRITICS}
+    """Run the panel with a mock model per role. Unnamed roles give a valid reply.
+
+    A role given a Model runs on that model instead of a mock.
+    """
+    defaults: dict[str, str | Recorder | Model] = {critic: verdict(critic) for critic in CRITICS}
+    chosen = defaults | {"combiner": COMBINED} | replies
+    models = {role: reply for role, reply in chosen.items() if isinstance(reply, Model)}
     recorders = {
         role: reply if isinstance(reply, Recorder) else Recorder(reply)
-        for role, reply in (defaults | {"combiner": COMBINED} | replies).items()
+        for role, reply in chosen.items()
+        if not isinstance(reply, Model)
     }
     idea_file = tmp_path / "idea.md"
     idea_file.write_text(IDEA, encoding="utf-8")
@@ -95,7 +101,8 @@ def run_panel(
         model_roles={
             role: get_model("mockllm/model", custom_outputs=recorder, memoize=False)
             for role, recorder in recorders.items()
-        },
+        }
+        | models,
         display="none",
         log_dir=str(tmp_path / "logs"),
     )

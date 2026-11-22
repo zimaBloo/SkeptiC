@@ -47,6 +47,10 @@ class CriticRecord(BaseModel):
         description="Positions of issues the panel lowered from fatal to major.",
     )
     checks: VerdictChecks | None = None
+    format_retried: bool = Field(
+        default=False,
+        description="The first reply was not valid JSON, so the critic was asked once more.",
+    )
     error: str | None = None
 
 
@@ -56,6 +60,10 @@ class CombinerRecord(BaseModel):
     timing: CallTiming = Field(default_factory=CallTiming)
     combined: CombinedVerdict | None = None
     checks: CombinedChecks | None = None
+    format_retried: bool = Field(
+        default=False,
+        description="The first reply was not valid JSON, so the combiner was asked once more.",
+    )
     error: str | None = None
     repair_error: str | None = Field(
         default=None, description="Why a rewrite of an overstated statement was not used."
@@ -83,7 +91,11 @@ class PanelRecord(BaseModel):
     ollama_version: str | None = None
     settings: dict[str, Any] = Field(
         default_factory=dict,
-        description="The task options the run used, apart from the idea and the progress file.",
+        description="The settings the run used (lineup, reasoning, max_tokens, temperature, "
+        "seed), after the lineup's defaults.",
+    )
+    critics_parallel: bool | None = Field(
+        default=None, description="The critics ran at the same time, not one after another."
     )
     critics: list[CriticRecord]
     combiner: CombinerRecord
@@ -128,6 +140,7 @@ def record_from_log(log: EvalLog | str | Path) -> PanelRecord:
                 model_overall=found.model_overall if found else None,
                 capped=found.capped if found else [],
                 checks=found.checks if found else None,
+                format_retried=found.format_retried if found else False,
                 error=found.error if found else "the run stopped before this critic answered",
             )
         )
@@ -148,11 +161,8 @@ def record_from_log(log: EvalLog | str | Path) -> PanelRecord:
         prompts_sha256=(log.eval.metadata or {}).get("prompts_sha256"),
         inspect_version=(log.eval.packages or {}).get("inspect_ai"),
         ollama_version=result.ollama_version,
-        settings={
-            k: v
-            for k, v in (log.eval.task_args or {}).items()
-            if k not in ("idea", "idea_id", "progress_file")
-        },
+        settings=_settings(log),
+        critics_parallel=result.critics_parallel,
         critics=critics,
         combiner=CombinerRecord(
             model=result.combiner_model,
@@ -160,6 +170,7 @@ def record_from_log(log: EvalLog | str | Path) -> PanelRecord:
             timing=timings.get("combiner", CallTiming()),
             combined=result.combined,
             checks=result.combined_checks,
+            format_retried=result.combiner_format_retried,
             error=result.combiner_error,
             repair_error=result.repair_error,
         ),
@@ -170,6 +181,18 @@ def record_from_log(log: EvalLog | str | Path) -> PanelRecord:
 def record_json_schema() -> dict[str, Any]:
     """JSON Schema of PanelRecord, for code that reads the records."""
     return PanelRecord.model_json_schema()
+
+
+def _settings(log: EvalLog) -> dict[str, Any]:
+    """The settings the run used. Older logs only have the task options as given."""
+    resolved = (log.eval.metadata or {}).get("settings")
+    if isinstance(resolved, dict):
+        return dict(resolved)
+    return {
+        k: v
+        for k, v in (log.eval.task_args or {}).items()
+        if k not in ("idea", "idea_id", "progress_file")
+    }
 
 
 def _timings(events: list[Any]) -> dict[str, CallTiming]:

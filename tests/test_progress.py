@@ -5,6 +5,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
 from mock_panel import COMBINED, IDEA, Recorder, only_sample, run_panel
 
 from skeptic.cli import main
@@ -22,7 +23,8 @@ def without_time(event: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in event.items() if key != "time"}
 
 
-def test_panel_reports_each_step_in_order(tmp_path: Path) -> None:
+def test_panel_reports_each_step_in_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("skeptic.panel.run_together", lambda critics: False)
     progress = tmp_path / "progress.jsonl"
     log, _ = run_panel(tmp_path, task_args={"progress_file": str(progress)})
 
@@ -39,6 +41,7 @@ def test_panel_reports_each_step_in_order(tmp_path: Path) -> None:
         "event": "run_started",
         "critics": list(CRITICS),
         "models": dict.fromkeys([*CRITICS, "combiner"], "mockllm/model"),
+        "parallel": False,
     }
     assert without_time(written[1]) == {
         "event": "critic_started",
@@ -62,6 +65,21 @@ def test_panel_reports_each_step_in_order(tmp_path: Path) -> None:
         "error": None,
     }
     assert without_time(written[-1]) == {"event": "run_finished", "ok": True, "error": None}
+
+
+def test_critics_that_run_together_report_as_each_starts_and_ends(tmp_path: Path) -> None:
+    progress = tmp_path / "progress.jsonl"
+    log, _ = run_panel(tmp_path, task_args={"progress_file": str(progress)})
+
+    assert log.status == "success"
+    written = events(progress)
+    kinds = [e["event"] for e in written]
+    assert written[0]["event"] == "run_started" and written[0]["parallel"] is True
+    for critic in CRITICS:
+        mine = [e["event"] for e in written if e.get("critic") == critic]
+        assert mine == ["critic_started", "critic_finished"]
+    last_critic = max(i for i, kind in enumerate(kinds) if kind == "critic_finished")
+    assert kinds.index("combiner_started") > last_critic
 
 
 def test_every_event_starts_with_its_utc_time_and_name(tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ dependencies = [
     "inspect-ai>=0.3.289",
     "openai>=2.0",
     "pydantic>=2.12",
+    "python-dotenv>=1.2",
     "uvicorn>=0.54.0",
 ]
 
