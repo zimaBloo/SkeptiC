@@ -15,6 +15,7 @@ import { Link } from "react-router";
 import { CRITICS, api, type CriticName, type PanelRecord, type RunDetail } from "../api";
 import type { Clouds, Intensities } from "../flow/field";
 import { FlowCanvas } from "../flow/FlowCanvas";
+import { Graticule } from "../flow/Graticule";
 import {
   clampToStage,
   labelRoom,
@@ -211,6 +212,7 @@ export function RunStage(props: {
 
   return (
     <div className={`run-stage${dragging ? " is-dragging" : ""}`} ref={stageRef}>
+      <Graticule />
       <FlowCanvas
         className="run-field"
         intensities={intensities}

@@ -26,6 +26,22 @@ export function Page() {
     scrolledFor.current = id;
     if (window.location.hash) return;
     window.requestAnimationFrame(() => panelRef.current?.scrollIntoView({ behavior, block: "start" }));
+    // The start section above may still grow as its ideas and past runs load, pushing
+    // the panel down; for a moment, follow it.
+    const start = document.getElementById("start");
+    if (!start) return;
+    let height = start.offsetHeight;
+    const observer = new ResizeObserver(() => {
+      if (start.offsetHeight === height) return;
+      height = start.offsetHeight;
+      panelRef.current?.scrollIntoView({ behavior: "auto", block: "start" });
+    });
+    observer.observe(start);
+    const timer = window.setTimeout(() => observer.disconnect(), 2500);
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(timer);
+    };
   }, [id, loaded]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // A run watched to its end: once the field has settled, the verdict comes into view.

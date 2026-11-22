@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 import { ApiError, CRITICS, api, type IdeaSummary, type LineupInfo, type LineupName, type RunSummary } from "../api";
 import { FlowCanvas } from "../flow/FlowCanvas";
+import { Graticule } from "../flow/Graticule";
 import type { Intensities } from "../flow/field";
 import { labelRoom, layout } from "../flow/geometry";
 import { formatSeconds } from "../flow/timeline";
@@ -263,6 +264,7 @@ export function RestingStage({ reduce }: { reduce: boolean }) {
   const l = size.width > 0 ? layout(size.width, size.height) : null;
   return (
     <div className="run-stage is-resting" ref={ref}>
+      <Graticule />
       <FlowCanvas className="run-field" intensities={RESTING} still={reduce} count={900} />
       {l && (
         <div className="node-labels" aria-hidden="true">

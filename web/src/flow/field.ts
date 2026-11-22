@@ -327,7 +327,7 @@ export class FlowField {
 
   private spawn(scatter: boolean): Particle {
     const stream = this.pickStream();
-    return {
+    const particle: Particle = {
       stream,
       t: scatter ? Math.random() : Math.random() * 0.04,
       speed: 150 + Math.random() * 130,
@@ -342,6 +342,38 @@ export class FlowField {
       ny: 0,
       fresh: true,
     };
+    // A streak leaving a finished critic for the verdict starts in that critic's cloud,
+    // where the work gathered, and eases onto its stream as it goes (the same spring
+    // that brings a streak back after the pointer pushed it aside). The cloud keeps its
+    // size: it still shows what the step used.
+    if (!scatter && stream !== DORMANT) {
+      const source = this.startNode(stream);
+      const from = source >= 0 ? this.randomCloud(source) : null;
+      if (from) {
+        const origin = this.nodePoint(source);
+        particle.dx = from.nx - origin.x;
+        particle.dy = from.ny - origin.y;
+        particle.t = 0;
+      }
+    }
+    return particle;
+  }
+
+  /** The finished node an outgoing stream starts at, as an index into CLOUD_NODES. */
+  private startNode(stream: number): number {
+    const id = STREAMS[stream] ?? "";
+    return id.startsWith("out:") ? CLOUD_NODES.indexOf(id.slice(4) as CriticName) : -1;
+  }
+
+  private randomCloud(node: number): CloudParticle | null {
+    const count = this.cloudCount[node] ?? 0;
+    if (count === 0) return null;
+    // Cloud particles are kept in one list; sample a few and take one of this node's.
+    for (let tries = 0; tries < 12; tries++) {
+      const c = this.cloud[Math.floor(Math.random() * this.cloud.length)];
+      if (c && c.node === node && !c.fresh) return c;
+    }
+    return null;
   }
 
   /** A stream for a new streak, weighted by how strongly each flows. A stream with no

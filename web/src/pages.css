@@ -674,11 +674,35 @@ code {
 
 /* ---------- Run ---------- */
 
-/* The panel's stage: one screen tall, the field behind the nodes. */
+/* The panel's stage: one screen tall, the field behind the nodes. Its ground has depth
+   without a visible fill: the faintest lift of light behind the panel, falling to
+   darker edges, so the map and the streams sit in a space rather than on a sheet. */
 .stage-section {
   position: relative;
   height: max(680px, 100svh);
   border-top: 1px solid var(--hair);
+  background:
+    radial-gradient(ellipse 62% 58% at 50% 48%, rgba(236, 232, 225, 0.05), rgba(236, 232, 225, 0) 72%),
+    radial-gradient(ellipse 120% 100% at 50% 50%, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.32) 100%);
+}
+
+.graticule {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  fill: none;
+  stroke: rgba(236, 232, 225, 0.05);
+  stroke-width: 1;
+}
+
+.graticule path {
+  vector-effect: non-scaling-stroke;
+}
+
+.graticule .is-main {
+  stroke: rgba(236, 232, 225, 0.085);
 }
 
 .run-field {
