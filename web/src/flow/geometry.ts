@@ -53,7 +53,9 @@ export function layout(width: number, height: number): Layout {
     height,
     idea: { x: width * (compact ? 0.09 : 0.13), y: centre },
     critics,
-    combiner: { x: width * (compact ? 0.92 : 0.85), y: centre },
+    // On wide screens the verdict's label sits to the right of its node; keep at least
+    // 150 px there so it never has to be cut short.
+    combiner: { x: compact ? width * 0.92 : Math.min(width * 0.85, width - 150), y: centre },
     spread: Math.max(8, Math.min(height * 0.045, compact ? 20 : 34)),
     compact,
   };
@@ -87,10 +89,14 @@ export function curve(l: Layout, stream: StreamId): Curve {
     };
   }
   const dx = l.combiner.x - node.x;
+  // The outer critics' streams stay level longer and turn late, so they pass beyond
+  // the inner critics' labels instead of under them.
+  const index = CRITICS.indexOf(critic);
+  const outer = index === 0 || index === CRITICS.length - 1;
   return {
     p0: node,
-    p1: { x: node.x + dx * 0.46, y: node.y },
-    p2: { x: l.combiner.x - dx * 0.5, y: l.combiner.y },
+    p1: { x: node.x + dx * (outer ? 0.7 : 0.46), y: node.y },
+    p2: { x: l.combiner.x - dx * (outer ? 0.25 : 0.5), y: l.combiner.y },
     p3: l.combiner,
   };
 }

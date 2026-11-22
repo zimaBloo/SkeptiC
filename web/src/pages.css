@@ -385,6 +385,32 @@ code {
   }
 }
 
+/* On the run page a step's node appears when the step starts: the ring grows into
+   place, then its label comes into focus. The stream reaches it a moment later. */
+.run-stage .node--critic .node-ring,
+.run-stage .node--combiner .node-ring {
+  animation: node-pop 460ms var(--ease-out) both;
+}
+
+.run-stage .node--critic .node-text,
+.run-stage .node--combiner .node-text {
+  animation: label-in 380ms var(--ease-out) 110ms both;
+}
+
+@keyframes node-pop {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.55);
+  }
+}
+
+@keyframes label-in {
+  from {
+    opacity: 0;
+    filter: blur(5px);
+  }
+}
+
 .node-ring[data-state="done"] {
   border-color: var(--critic);
   background: var(--critic);
@@ -474,7 +500,7 @@ code {
   transform: none;
   align-items: flex-start;
   text-align: left;
-  max-width: min(230px, 46vw);
+  max-width: min(230px, var(--label-max, 46vw));
 }
 
 .node-title {
@@ -803,6 +829,12 @@ code {
   }
   .node-ring[data-state="working"]::after {
     animation: none;
+  }
+  .run-stage .node--critic .node-ring,
+  .run-stage .node--combiner .node-ring,
+  .run-stage .node--critic .node-text,
+  .run-stage .node--combiner .node-text {
+    animation-name: fade;
   }
   @keyframes fade {
     from {

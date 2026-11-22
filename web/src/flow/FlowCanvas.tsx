@@ -17,6 +17,9 @@ export function FlowCanvas({ intensities, still = false, className, count }: Pro
   const fieldRef = useRef<FlowField | null>(null);
   const intensitiesRef = useRef(intensities);
   intensitiesRef.current = intensities;
+  // The first intensities with any flow are applied at once, spread along the streams,
+  // so a page opened in the middle of a run shows it already flowing.
+  const primed = useRef(false);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -24,6 +27,7 @@ export function FlowCanvas({ intensities, still = false, className, count }: Pro
     const field = new FlowField(canvas, { colours: streamColours(canvas), count });
     fieldRef.current = field;
     field.setIntensities(intensitiesRef.current, true);
+    primed.current = hasFlow(intensitiesRef.current);
 
     const size = () => {
       const rect = canvas.getBoundingClientRect();
@@ -104,11 +108,17 @@ export function FlowCanvas({ intensities, still = false, className, count }: Pro
   useEffect(() => {
     const field = fieldRef.current;
     if (!field) return;
-    field.setIntensities(intensities);
+    const flowing = hasFlow(intensities);
+    field.setIntensities(intensities, flowing && !primed.current);
+    if (flowing) primed.current = true;
     if (still) field.drawStill();
   }, [intensities, still]);
 
   return <canvas ref={canvasRef} className={className} aria-hidden="true" />;
+}
+
+function hasFlow(intensities: Intensities): boolean {
+  return Object.values(intensities).some((v) => (v ?? 0) > 0);
 }
 
 /** Each stream's colour: the ink, tinted towards its critic's hue. */

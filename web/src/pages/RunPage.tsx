@@ -120,22 +120,16 @@ export function RunPage() {
   );
 }
 
-/** How strongly each stream flows, from where every step stands. */
+/** How strongly each stream flows, from where every step stands. Only running steps
+ * draw flow: the idea streams into the critic that is writing, and the critics that
+ * answered stream into the verdict while it is being combined. Nothing flows to a
+ * step that is waiting or over. */
 function intensitiesFor(states: Record<StepName, StepState>, settled: boolean): Intensities {
   const out: Intensities = {};
+  const combining = states.combiner === "working" && !settled;
   for (const critic of CRITICS) {
-    const state = states[critic];
-    out[`in:${critic}`] =
-      state === "working" ? 1 : state === "done" ? 0.2 : state === "failed" ? 0 : 0.08;
-    const answered = state === "done";
-    const combiner = states.combiner;
-    out[`out:${critic}`] = !answered
-      ? 0
-      : combiner === "working" && !settled
-        ? 1
-        : combiner === "done" || settled
-          ? 0.2
-          : 0.05;
+    out[`in:${critic}`] = states[critic] === "working" && !settled ? 1 : 0;
+    out[`out:${critic}`] = combining && states[critic] === "done" ? 1 : 0;
   }
   return out;
 }
@@ -154,14 +148,23 @@ function NodeLabels({ layout: l, run, timeline, states, at, quiet }: LabelProps)
     <div className={`node-labels${quiet ? " is-quiet" : ""}`}>
       <div
         className="node node--idea"
-        style={{ left: l.idea.x, top: l.idea.y, "--edge": `${l.idea.x - 16}px` } as CSSProperties}
+        style={
+          {
+            left: l.idea.x,
+            top: l.idea.y,
+            "--edge": `${l.idea.x - 16}px`,
+            // On a phone the title ends before the critics' column.
+            "--label-max": `${Math.max(120, l.critics.market.x - 28)}px`,
+          } as CSSProperties
+        }
       >
         <span className="node-ring" data-state="done" />
         <div className={`node-text node-text--below${l.compact ? " node-text--start" : ""}`} data-quiet>
           <span className="node-title">{run.idea_title}</span>
         </div>
       </div>
-      {CRITICS.map((critic) => (
+      {/* A step's node appears when the step starts, and stays once it has answered. */}
+      {CRITICS.filter((critic) => states[critic] !== "waiting").map((critic) => (
         <CriticNode
           key={critic}
           critic={critic}
@@ -174,15 +177,33 @@ function NodeLabels({ layout: l, run, timeline, states, at, quiet }: LabelProps)
           side={labelSide(l, critic)}
         />
       ))}
-      <div className="node node--combiner" style={{ left: l.combiner.x, top: l.combiner.y }}>
-        <span className="node-ring" data-state={states.combiner} />
-        <div className={`node-text ${l.compact ? "node-text--above" : "node-text--below"}`} data-quiet>
-          <span className="node-title">Verdict</span>
-          <span className="node-meta mono">
-            {stepLine(states.combiner, timeline.steps.combiner.model, stepSeconds(timeline.steps.combiner, at))}
-          </span>
+      {states.combiner !== "waiting" && (
+        <div
+          className="node node--combiner"
+          style={{ left: l.combiner.x, top: l.combiner.y, "--room": `${l.width - l.combiner.x - 36}px` } as CSSProperties}
+        >
+          <span className="node-ring" data-state={states.combiner} />
+          {/* Every stream reaches the verdict from the left, so its label sits to the
+              right (above it on a phone), in short lines that fit the space there. */}
+          <div className={`node-text ${l.compact ? "node-text--above" : "node-text--right"}`} data-quiet>
+            <span className="node-title">Verdict</span>
+            {l.compact ? (
+              // On a phone two lines, so the label stays clear of the critics' labels.
+              <span className="node-meta mono">
+                {modelName(timeline.steps.combiner.model)} ·{" "}
+                {verdictState(states.combiner, stepSeconds(timeline.steps.combiner, at))}
+              </span>
+            ) : (
+              <>
+                <span className="node-meta mono">{modelName(timeline.steps.combiner.model)}</span>
+                <span className="node-meta mono">
+                  {verdictState(states.combiner, stepSeconds(timeline.steps.combiner, at))}
+                </span>
+              </>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -219,6 +240,19 @@ function CriticNode(props: {
       </div>
     </div>
   );
+}
+
+function verdictState(state: StepState, seconds: number | null): string {
+  switch (state) {
+    case "waiting":
+      return "waiting";
+    case "working":
+      return `writing ${formatSeconds(seconds)}`;
+    case "done":
+      return formatSeconds(seconds);
+    case "failed":
+      return "no answer";
+  }
 }
 
 function stepLine(state: StepState, model: string | null, seconds: number | null): string {

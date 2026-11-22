@@ -28,7 +28,7 @@ export interface Rect {
 export type StreamColours = Record<StreamId, string>;
 
 interface Particle {
-  stream: number;
+  stream: number; // index into STREAMS, or DORMANT while no stream has work
   t: number;
   speed: number; // px per second along the curve at full intensity
   offset: number; // -1..1 across the stream
@@ -56,6 +56,10 @@ const TRAIL_FADE = 0.085; // share of the trail removed per 60 Hz frame
 const INTENSITY_EASE = 1.6; // per second
 const IDLE_FLOOR = 0.035; // calm streams still drift
 const BANDS = 4; // brightness steps along a streak's life
+const DORMANT = -1; // a streak waiting for a stream with work
+// Waiting streaks join streams with work at a steady rate: the whole pool over about
+// one trip along a stream, so a starting stream fills evenly instead of in a slug.
+const JOIN_SECONDS = 3.5;
 // The trail fade multiplies alpha, and on an 8-bit canvas small values round back to
 // themselves (3/255 stays 3/255), leaving a grey ghost of every streak. Every
 // TRIM_EVERY frames the canvas is redrawn through a filter that subtracts TRIM_STEP
@@ -79,6 +83,7 @@ export class FlowField {
   private readonly buckets: Particle[][] = Array.from({ length: STREAMS.length * BANDS }, () => []);
   private frame = 0;
   private frames = 0;
+  private joinBudget = 0;
   private last = 0;
   private running = false;
   private readonly canTrim: boolean;
@@ -111,6 +116,10 @@ export class FlowField {
       this.target[i] = intensities[id] ?? 0;
       if (immediate) this.current[i] = this.target[i] ?? 0;
     });
+    if (immediate) {
+      // Start already flowing: spread every streak along the streams that have work.
+      for (let k = 0; k < this.particles.length; k++) this.particles[k] = this.spawn(true);
+    }
   }
 
   setPointer(point: { x: number; y: number } | null): void {
@@ -162,7 +171,8 @@ export class FlowField {
     STREAMS.forEach((_, i) => {
       const c = this.curves[i];
       const strength = Math.max(this.target[i] ?? 0, IDLE_FLOOR * 3);
-      if (!c) return;
+      // Only streams with work are drawn, as in the moving field.
+      if (!c || (this.target[i] ?? 0) === 0) return;
       for (const offset of [-0.6, -0.2, 0.2, 0.6]) {
         ctx.beginPath();
         // Lift the pen inside label clearings, as the moving streaks do.
@@ -210,19 +220,22 @@ export class FlowField {
     };
   }
 
+  /** A stream for a new streak, weighted by how strongly each flows. A stream with no
+   * work (target 0) gets none, so nothing flows to a step that is not running. */
   private pickStream(): number {
     let total = 0;
-    const weights = Array.from(this.current, (v) => {
-      const w = Math.pow(Math.max(v, IDLE_FLOOR), 1.3);
+    const weights = Array.from(this.current, (v, i) => {
+      const w = (this.target[i] ?? 0) > 0 ? Math.pow(Math.max(v, IDLE_FLOOR), 1.3) : 0;
       total += w;
       return w;
     });
+    if (total === 0) return DORMANT;
     let r = Math.random() * total;
     for (let i = 0; i < weights.length; i++) {
       r -= weights[i] ?? 0;
-      if (r <= 0) return i;
+      if (r <= 0 && (weights[i] ?? 0) > 0) return i;
     }
-    return weights.length - 1;
+    return weights.findLastIndex((w) => w > 0);
   }
 
   private step(dt: number): void {
@@ -233,19 +246,39 @@ export class FlowField {
     }
     const spring = Math.exp(-dt * SPRING_BACK);
     const pointer = this.pointer;
+    const joinRate = this.particles.length / JOIN_SECONDS;
+    const hasWork = this.target.some((v) => v > 0);
+    // No backlog builds up while nothing has work, so a starting stream gets no burst.
+    this.joinBudget = hasWork ? Math.min(this.joinBudget + joinRate * dt, joinRate * 0.1) : 0;
     for (let k = 0; k < this.particles.length; k++) {
       let p = this.particles[k] as Particle;
-      const intensity = Math.max(this.current[p.stream] ?? 0, IDLE_FLOOR);
-      // Streaks on quiet streams retire early, so the working stream fills fast.
-      if (Math.random() < (1 - intensity) * dt * 0.9) {
+      if (p.stream === DORMANT) {
+        // Waiting streaks join a stream with work from its source, at a steady rate.
+        if (this.joinBudget < 1) continue;
+        this.joinBudget -= 1;
         p = this.spawn(false);
         this.particles[k] = p;
+        if (p.stream === DORMANT) continue;
+      }
+      const target = this.target[p.stream] ?? 0;
+      const stopping = target === 0;
+      // Pace and lifetime follow where the stream is heading, so a stream that has just
+      // started moves at its full pace at once; brightness (in draw) eases in instead.
+      const intensity = Math.max(this.current[p.stream] ?? 0, target, IDLE_FLOOR);
+      // On a calm stream that still has work, streaks retire early so a busier one
+      // fills fast. On a stream whose step has ended, streaks already under way
+      // finish their path at full speed instead of vanishing mid-air.
+      if (!stopping && Math.random() < (1 - intensity) * dt * 0.9) {
+        p = this.spawn(false);
+        this.particles[k] = p;
+        if (p.stream === DORMANT) continue;
       }
       const length = this.lengths[p.stream] ?? 1;
-      p.t += (p.speed * dt * (0.25 + 0.75 * intensity)) / length;
+      p.t += (p.speed * dt * (stopping ? 1 : 0.25 + 0.75 * intensity)) / length;
       if (p.t >= 1) {
         p = this.spawn(false);
         this.particles[k] = p;
+        if (p.stream === DORMANT) continue;
       }
       const c = this.curves[p.stream];
       if (!c) continue;
@@ -303,6 +336,7 @@ export class FlowField {
     const buckets = this.buckets;
     for (const bucket of buckets) bucket.length = 0;
     for (const p of this.particles) {
+      if (p.stream === DORMANT) continue;
       const edge = Math.min(1, p.t / 0.07, (1 - p.t) / 0.07);
       const band = Math.min(BANDS, Math.max(1, Math.ceil(edge * BANDS)));
       buckets[p.stream * BANDS + band - 1]?.push(p);

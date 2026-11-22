@@ -16,8 +16,8 @@ const MAX_TITLE = 200; // the server's limit
 // At rest the field shows the panel's shape: the idea drifting towards every critic.
 const RESTING: Intensities = Object.fromEntries(
   CRITICS.flatMap((c) => [
-    [`in:${c}`, 0.14],
-    [`out:${c}`, 0.06],
+    [`in:${c}`, 0.3],
+    [`out:${c}`, 0.16],
   ]),
 );
 
@@ -207,7 +207,7 @@ function PanelDiagram({ reduce }: { reduce: boolean }) {
   const l = size.width > 0 ? layout(size.width, size.height) : null;
   return (
     <div className="start-diagram" ref={ref} aria-hidden="true">
-      <FlowCanvas intensities={RESTING} still={reduce} count={700} />
+      <FlowCanvas intensities={RESTING} still={reduce} count={900} />
       {l && (
         <div className="node-labels is-resting">
           <div className="node node--idea" style={{ left: l.idea.x, top: l.idea.y }}>
@@ -237,7 +237,7 @@ function PanelDiagram({ reduce }: { reduce: boolean }) {
           ))}
           <div className="node node--combiner" style={{ left: l.combiner.x, top: l.combiner.y }}>
             <span className="node-ring" data-state="waiting" />
-            <div className={`node-text ${l.compact ? "node-text--above" : "node-text--below"}`} data-quiet>
+            <div className={`node-text ${l.compact ? "node-text--above" : "node-text--right"}`} data-quiet>
               <span className="node-title">Verdict</span>
             </div>
           </div>
