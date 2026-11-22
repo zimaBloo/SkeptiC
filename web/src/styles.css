@@ -1,0 +1,202 @@
+@import "@fontsource/schibsted-grotesk/400.css";
+@import "@fontsource/schibsted-grotesk/500.css";
+@import "@fontsource/schibsted-grotesk/600.css";
+@import "@fontsource/fragment-mono/400.css";
+
+:root {
+  /* Ground and ink: charcoal like the Wind Map's dark field, warm off-white ink. */
+  --ground: #111316;
+  --ground-raised: #171a1e;
+  --ink: #ece8e1;
+  --ink-2: #b4afa6;
+  --ink-3: #85817a;
+  --hair: rgba(236, 232, 225, 0.14);
+  --hair-strong: rgba(236, 232, 225, 0.28);
+
+  /* One muted hue per critic: a tint on its stream, a small marker elsewhere. */
+  --market: #d2a657;
+  --technical: #6bb5a2;
+  --customer: #9198dc;
+  --risk: #d7846b;
+  --fatal: #e56a52;
+
+  --sans: "Schibsted Grotesk", system-ui, sans-serif;
+  --mono: "Fragment Mono", ui-monospace, monospace;
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+
+  color-scheme: dark;
+  accent-color: var(--ink);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 18px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: rgba(236, 232, 225, 0.85);
+  color: var(--ground);
+}
+
+:focus-visible {
+  outline: 1.5px solid var(--ink);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--hair-strong) transparent;
+}
+
+a {
+  color: inherit;
+  text-decoration-color: var(--hair-strong);
+  text-underline-offset: 0.22em;
+  text-decoration-thickness: 1px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  a:hover {
+    text-decoration-color: var(--ink);
+  }
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 0.78em;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Read out by screen readers, not shown. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.critic-dot {
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  flex: none;
+  background: currentColor;
+}
+
+[data-critic="market"] {
+  --critic: var(--market);
+}
+[data-critic="technical"] {
+  --critic: var(--technical);
+}
+[data-critic="customer"] {
+  --critic: var(--customer);
+}
+[data-critic="risk"] {
+  --critic: var(--risk);
+}
+
+/* The page frame: a quiet top line with the wordmark, then the page. */
+.frame {
+  position: relative;
+  min-height: 100%;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.topline {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: baseline;
+  gap: 28px;
+  padding: 26px clamp(20px, 4vw, 56px) 0;
+}
+
+.wordmark {
+  font-weight: 600;
+  font-size: 21px;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+}
+
+.wordmark span {
+  color: var(--market);
+}
+
+.topline nav {
+  display: flex;
+  gap: 22px;
+  font-size: 15px;
+  color: var(--ink-2);
+}
+
+.topline nav a {
+  text-decoration: none;
+}
+
+.topline nav a[aria-current="page"] {
+  color: var(--ink);
+}
+
+.page-enter {
+  animation: page-in 320ms var(--ease-out) both;
+}
+
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter {
+    animation: page-fade 200ms ease both;
+  }
+  @keyframes page-fade {
+    from {
+      opacity: 0;
+    }
+  }
+}

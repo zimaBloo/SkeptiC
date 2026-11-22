@@ -1,0 +1,428 @@
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { Link, useParams } from "react-router";
+import { CRITICS, api, type CriticName, type PanelRecord, type RunDetail } from "../api";
+import { FlowCanvas } from "../flow/FlowCanvas";
+import type { Intensities } from "../flow/field";
+import { labelRoom, labelSide, layout, type Layout } from "../flow/geometry";
+import {
+  CUT_OFF,
+  currentStep,
+  formatSeconds,
+  statesAt,
+  stepSeconds,
+  timelineFromEvents,
+  timelineFromRecord,
+  type StepName,
+  type StepState,
+  type Timeline,
+} from "../flow/timeline";
+import { CRITIC_TITLES, modelName } from "../format";
+import { useNow, useReducedMotion, useRevealGuard, useRun, useSize } from "../hooks";
+import { Verdict } from "./Verdict";
+
+const REPLAY_SPEED = 8;
+/** How long the settled field holds, after a live run ends, before the verdict comes in. */
+const SETTLE_MS = 1400;
+
+export function RunPage() {
+  const { id } = useParams();
+  const { run, error, missing } = useRun(id);
+  const reduce = useReducedMotion();
+  const [stageRef, size] = useSize<HTMLDivElement>();
+  const [replayFrom, setReplayFrom] = useState<number | null>(null);
+
+  const record = run?.record ?? null;
+  const live = run?.status === "running";
+  const ended = run !== null && run.status !== "running";
+  const replaying = replayFrom !== null && record !== null;
+  const timeline = useMemo<Timeline>(
+    () =>
+      replaying && record
+        ? timelineFromRecord(record)
+        : timelineFromEvents(run?.events ?? [], ended, run?.finished_at ?? null),
+    [replaying, record, run?.events, ended, run?.finished_at],
+  );
+
+  // A run that ends while it is being watched holds its settled field for a moment,
+  // so the audience sees every stream arrive before the verdict covers them.
+  const [settling, setSettling] = useState(false);
+  const wasLive = useRef(false);
+  useEffect(() => {
+    if (live) wasLive.current = true;
+    else if (wasLive.current && ended) {
+      wasLive.current = false;
+      setSettling(true);
+    }
+  }, [live, ended]);
+  useEffect(() => {
+    if (!settling) return;
+    const timer = window.setTimeout(() => setSettling(false), reduce ? 0 : SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [settling, reduce]);
+
+  const now = useNow((live && !error) || replaying, 200);
+  const at = replaying && timeline.start !== null
+    ? timeline.start + Math.max(0, now - (replayFrom ?? now)) * REPLAY_SPEED
+    : live
+      ? now
+      : Number.POSITIVE_INFINITY;
+  const states = statesAt(timeline, at);
+
+  useEffect(() => {
+    if (replaying && timeline.end !== null && at > timeline.end + 1500) setReplayFrom(null);
+  }, [replaying, timeline.end, at]);
+
+  const showResult = ended && !replaying && !settling;
+  const intensities = useMemo(() => intensitiesFor(states, showResult), [states, showResult]);
+  const l = size.width > 0 ? layout(size.width, size.height) : null;
+  const verdict = run?.status === "success" && record?.combiner.combined ? record : null;
+
+  return (
+    <div className="run-page">
+      <FlowCanvas
+        className={`run-field${showResult ? " is-dim" : ""}`}
+        intensities={intensities}
+        still={reduce}
+      />
+      <div className="run-stage" ref={stageRef}>
+        {l && run && (
+          <NodeLabels
+            layout={l}
+            run={run}
+            timeline={timeline}
+            states={states}
+            at={at}
+            quiet={showResult}
+          />
+        )}
+      </div>
+
+      {showResult && run && (
+        <div className="run-result">
+          <PanelSummary run={run} record={record} onReplay={record ? () => setReplayFrom(Date.now()) : undefined} />
+          {verdict ? <Verdict record={verdict} runId={run.id} /> : <RunProblem run={run} />}
+        </div>
+      )}
+
+      <StatusLine
+        id={id}
+        run={run}
+        error={error}
+        missing={missing}
+        timeline={timeline}
+        states={states}
+        at={at}
+        replaying={replaying}
+        settling={settling}
+        onStop={live && id ? () => api.stopRun(id).then(() => undefined) : undefined}
+      />
+    </div>
+  );
+}
+
+/** How strongly each stream flows, from where every step stands. */
+function intensitiesFor(states: Record<StepName, StepState>, settled: boolean): Intensities {
+  const out: Intensities = {};
+  for (const critic of CRITICS) {
+    const state = states[critic];
+    out[`in:${critic}`] =
+      state === "working" ? 1 : state === "done" ? 0.2 : state === "failed" ? 0 : 0.08;
+    const answered = state === "done";
+    const combiner = states.combiner;
+    out[`out:${critic}`] = !answered
+      ? 0
+      : combiner === "working" && !settled
+        ? 1
+        : combiner === "done" || settled
+          ? 0.2
+          : 0.05;
+  }
+  return out;
+}
+
+interface LabelProps {
+  layout: Layout;
+  run: RunDetail;
+  timeline: Timeline;
+  states: Record<StepName, StepState>;
+  at: number;
+  quiet: boolean;
+}
+
+function NodeLabels({ layout: l, run, timeline, states, at, quiet }: LabelProps) {
+  return (
+    <div className={`node-labels${quiet ? " is-quiet" : ""}`}>
+      <div
+        className="node node--idea"
+        style={{ left: l.idea.x, top: l.idea.y, "--edge": `${l.idea.x - 16}px` } as CSSProperties}
+      >
+        <span className="node-ring" data-state="done" />
+        <div className={`node-text node-text--below${l.compact ? " node-text--start" : ""}`} data-quiet>
+          <span className="node-title">{run.idea_title}</span>
+        </div>
+      </div>
+      {CRITICS.map((critic) => (
+        <CriticNode
+          key={critic}
+          critic={critic}
+          at={at}
+          state={states[critic]}
+          timeline={timeline}
+          x={l.critics[critic].x}
+          y={l.critics[critic].y}
+          room={labelRoom(l, critic)}
+          side={labelSide(l, critic)}
+        />
+      ))}
+      <div className="node node--combiner" style={{ left: l.combiner.x, top: l.combiner.y }}>
+        <span className="node-ring" data-state={states.combiner} />
+        <div className={`node-text ${l.compact ? "node-text--above" : "node-text--below"}`} data-quiet>
+          <span className="node-title">Verdict</span>
+          <span className="node-meta mono">
+            {stepLine(states.combiner, timeline.steps.combiner.model, stepSeconds(timeline.steps.combiner, at))}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CriticNode(props: {
+  critic: CriticName;
+  state: StepState;
+  timeline: Timeline;
+  at: number;
+  x: number;
+  y: number;
+  room: number;
+  side: "above" | "below";
+}) {
+  const { critic, state, timeline, at, x, y, room, side } = props;
+  const step = timeline.steps[critic];
+  const seconds = stepSeconds(step, at);
+  let meta = stepLine(state, step.model, seconds);
+  if (state === "failed" && step.error === CUT_OFF) meta = `${modelName(step.model)} · ${CUT_OFF}`;
+  if (state === "done" && step.issues !== null) {
+    meta = `${modelName(step.model)} · ${step.issues} issues · ${formatSeconds(seconds)}`;
+  }
+  return (
+    <div
+      className="node node--critic"
+      data-critic={critic}
+      data-state={state}
+      style={{ left: x, top: y, "--room": `${room}px` } as CSSProperties}
+    >
+      <span className="node-ring" data-state={state} />
+      <div className={`node-text node-text--right is-${side}`} data-quiet>
+        <span className="node-title">{CRITIC_TITLES[critic]}</span>
+        <span className="node-meta mono">{meta}</span>
+      </div>
+    </div>
+  );
+}
+
+function stepLine(state: StepState, model: string | null, seconds: number | null): string {
+  const name = modelName(model);
+  switch (state) {
+    case "waiting":
+      return name ? `${name} · waiting` : "waiting";
+    case "working":
+      return `${name ? `${name} · ` : ""}writing ${formatSeconds(seconds)}`;
+    case "done":
+      return `${name ? `${name} · ` : ""}${formatSeconds(seconds)}`;
+    case "failed":
+      return `${name ? `${name} · ` : ""}no usable answer`;
+  }
+}
+
+function StatusLine(props: {
+  id: string | undefined;
+  run: RunDetail | null;
+  error: string | null;
+  missing: boolean;
+  timeline: Timeline;
+  states: Record<StepName, StepState>;
+  at: number;
+  replaying: boolean;
+  settling: boolean;
+  onStop?: () => Promise<void>;
+}) {
+  const { id, run, error, missing, timeline, states, at, replaying, settling, onStop } = props;
+  if (missing) {
+    return (
+      <p className="status-line" role="alert">
+        There is no run called {id}. <Link to="/">Start a new run</Link>
+      </p>
+    );
+  }
+  if (error && !run) return <p className="status-line" role="alert">Cannot reach the panel's server: {error}</p>;
+  if (!run) return <p className="status-line">Loading the run…</p>;
+  if (run.status !== "running" && !replaying && !settling) return null;
+  if (error && run.status === "running") {
+    return (
+      <p className="status-line" role="alert">
+        Lost contact with the panel's server ({error}). Trying again every few seconds.
+      </p>
+    );
+  }
+
+  const elapsed =
+    timeline.start !== null ? Math.max(0, (Math.min(at, timeline.end ?? at) - timeline.start) / 1000) : null;
+  const step = currentStep(states);
+  let what = settling ? "The run ended before the first critic started" : "Starting the panel and loading the first model…";
+  if (step) {
+    const state = states[step];
+    const who = step === "combiner" ? "The combining step" : `${CRITIC_TITLES[step]} critic`;
+    if (state === "failed" && timeline.steps[step].error === CUT_OFF) what = `${who} was ${CUT_OFF}`;
+    else if (step === "combiner") what = state === "working" ? "Combining the four reviews" : state === "done" ? "The panel has finished" : `${who} gave no usable answer`;
+    else what = `${who} ${state === "working" ? "is writing" : state === "failed" ? "gave no usable answer" : "is done"}`;
+  }
+  const label = replaying
+    ? `Replay ${REPLAY_SPEED}×`
+    : !settling
+      ? "Running"
+      : run.status === "success"
+        ? "Finished"
+        : run.status === "stopped"
+          ? "Stopped"
+          : "Ended";
+
+  return (
+    <div className="status-line">
+      <span className="mono">{label}</span>
+      <span className="mono">{formatSeconds(elapsed)}</span>
+      <span role="status">{what}</span>
+      {onStop && !settling && <StopControl onStop={onStop} />}
+    </div>
+  );
+}
+
+/** Stopping throws away minutes of model time, so it takes a second, deliberate click. */
+function StopControl({ onStop }: { onStop: () => Promise<void> }) {
+  const [asking, setAsking] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const keepRef = useRef<HTMLButtonElement>(null);
+  const stopRef = useRef<HTMLButtonElement>(null);
+  const wasAsking = useRef(false);
+
+  // When the question goes away without a stop, focus goes back to where it started.
+  useEffect(() => {
+    if (asking) wasAsking.current = true;
+    else if (wasAsking.current) {
+      wasAsking.current = false;
+      stopRef.current?.focus();
+    }
+  }, [asking]);
+
+  useEffect(() => {
+    if (!asking) return;
+    keepRef.current?.focus();
+    // An unanswered question goes away on its own.
+    const timer = window.setTimeout(() => setAsking(false), 8000);
+    return () => window.clearTimeout(timer);
+  }, [asking]);
+
+  const confirm = async () => {
+    setAsking(false);
+    setStopping(true);
+    try {
+      // On success "Stopping…" stays until the next poll shows the run ended,
+      // which removes this control.
+      await onStop();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setStopping(false);
+    }
+  };
+
+  if (stopping) return <span className="stop-control muted">Stopping…</span>;
+  if (asking) {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setAsking(false);
+    };
+    return (
+      <span className="stop-control" role="group" aria-label="Stop the run?" onKeyDown={onKeyDown}>
+        <span>Stop the run? It cannot be resumed.</span>
+        <button type="button" className="text-button" onClick={confirm}>
+          Stop it
+        </button>
+        <button ref={keepRef} type="button" className="text-button" onClick={() => setAsking(false)}>
+          Keep running
+        </button>
+      </span>
+    );
+  }
+  return (
+    <span className="stop-control">
+      <button
+        ref={stopRef}
+        type="button"
+        className="text-button"
+        onClick={() => {
+          setError(null);
+          setAsking(true);
+        }}
+      >
+        Stop run
+      </button>
+      {error && (
+        <span className="form-error" role="alert">
+          Could not stop it: {error}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function PanelSummary({ run, record, onReplay }: { run: RunDetail; record: PanelRecord | null; onReplay?: () => void }) {
+  const ref = useRevealGuard<HTMLElement>();
+  const start = record?.started_at ?? null;
+  const end = record?.finished_at ?? null;
+  const seconds = start && end ? (Date.parse(end) - Date.parse(start)) / 1000 : null;
+  return (
+    <aside ref={ref} className="panel-summary" aria-label="The run">
+      <h1 className="panel-idea">{run.idea_title}</h1>
+      {record && (
+        <ul className="panel-critics">
+          {record.critics.map((critic) => (
+            <li key={critic.critic} data-critic={critic.critic}>
+              <span className="critic-dot" />
+              <span>{CRITIC_TITLES[critic.critic]}</span>
+              <span className="mono">{critic.verdict ? critic.verdict.overall : "no answer"}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="panel-meta mono">
+        {seconds !== null ? `${formatSeconds(seconds)} · ` : ""}four models · every call logged
+      </p>
+      <div className="panel-actions">
+        <Link to={`/runs/${run.id}/details`}>Each critic's issues</Link>
+        {onReplay && (
+          <button type="button" className="text-button" onClick={onReplay}>
+            Replay the run
+          </button>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function RunProblem({ run }: { run: RunDetail }) {
+  const message =
+    run.status === "stopped"
+      ? "The run was stopped before the panel finished."
+      : run.error ?? run.record?.error ?? "The panel did not finish.";
+  return (
+    <section className="verdict verdict--problem" aria-live="polite">
+      <p className="verdict-lede">No verdict for this run.</p>
+      <p className="verdict-rest">{message}</p>
+      {run.record && (
+        <p className="verdict-rest">
+          <Link to={`/runs/${run.id}/details`}>See what each critic said</Link>
+        </p>
+      )}
+    </section>
+  );
+}
