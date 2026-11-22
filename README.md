@@ -4,8 +4,8 @@ SkeptiC is a panel of AI critics for innovation ideas. You give it an idea
 that a person wrote; it tells you what is weak or risky about the idea and how
 the idea could be better.
 
-It is an MSc thesis project in early development. The critic panel runs from
-the command line; there is no web interface yet.
+It is an MSc thesis project in early development. The panel runs from the
+command line or from a small web interface.
 
 Each critic looks at the idea from one angle (market, technical feasibility,
 customer value, or risk and regulation) and runs on a model from a different
@@ -82,6 +82,24 @@ uv run skeptic export logs/<run>.eval   # the same file, from an earlier run
 uv run skeptic schema                   # the file's format, as JSON Schema
 ```
 
+## Web interface
+
+The interface shows a run as it happens: the idea flows to each critic while
+that critic works, then on to the combined verdict, and every finding links
+back to the words of the idea it is about. It needs Node.js 22.22 or a later 22, 24, or 26 and later.
+
+```bash
+npm --prefix web install
+npm --prefix web run build
+uv run skeptic serve
+```
+
+Then open <http://127.0.0.1:8000>. To work on the interface itself, run
+`uv run skeptic serve` and `npm --prefix web run dev` side by side and open
+<http://localhost:5173>, which reloads on every change. Runs started from the
+interface keep their files in `runs/` and their Inspect logs in `logs/`, and
+git ignores both.
+
 ## Checks
 
 GitHub runs these on every push to `main` and on every pull request.
@@ -91,6 +109,8 @@ uv run ruff check
 uv run ruff format --check
 uv run pyright
 uv run pytest
+npm --prefix web run typecheck
+npm --prefix web test
 ```
 
 ## Licence
