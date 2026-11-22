@@ -5,10 +5,12 @@ description = "A panel of AI critics that says what is weak or risky about an in
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
 dependencies = [
+    "fastapi>=0.162.7",
     "httpx>=0.28",
     "inspect-ai>=0.3.289",
     "openai>=2.0",
     "pydantic>=2.12",
+    "uvicorn>=0.54.0",
 ]
 
 [project.scripts]

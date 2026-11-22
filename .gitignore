@@ -8,6 +8,9 @@
 # Run logs: raw model logs can contain secrets, so they stay local
 logs/
 
+# Runs started from the web API: ideas, progress and records stay local
+runs/
+
 # Python
 __pycache__/
 *.py[cod]

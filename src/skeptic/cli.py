@@ -6,6 +6,8 @@
         Write the record of an earlier run from its Inspect log.
     skeptic schema
         Print the JSON Schema of the record.
+    skeptic serve [--host HOST] [--port PORT] [--allowed-host NAME ...]
+        Start the web API (see skeptic.server).
 
 Without --out, the record is written next to the Inspect log, with .json in
 place of .eval.
@@ -17,11 +19,13 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+import uvicorn
 from inspect_ai import eval as inspect_eval
 from inspect_ai.log import EvalLog
 
 from skeptic.panel import skeptic_panel
 from skeptic.record import PanelRecord, record_from_log, record_json_schema
+from skeptic.server import create_app, serve_hosts
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -52,7 +56,24 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     commands.add_parser("schema", help="print the JSON Schema of the record")
 
+    serve = commands.add_parser("serve", help="start the web API")
+    serve.add_argument("--host", default="127.0.0.1", help="address to listen on")
+    serve.add_argument("--port", type=int, default=8000, help="port to listen on")
+    serve.add_argument(
+        "--allowed-host",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="another host name or address the API should answer to (repeatable)",
+    )
+
     args = parser.parse_args(argv)
+    if args.command == "serve":
+        hosts = serve_hosts(args.host, args.allowed_host)
+        print(f"Answering requests addressed to: {', '.join(hosts)}", file=sys.stderr)
+        app = create_app(allowed_hosts=hosts)
+        uvicorn.run(app, host=args.host, port=args.port)
+        return 0
     if args.command == "schema":
         print(json.dumps(record_json_schema(), indent=2))
         return 0
