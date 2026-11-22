@@ -192,6 +192,20 @@ export function RunStage(props: {
   const { dragging, dragHandlers } = useNodeDrag(stageRef, placement, setPlacement, l !== null, setOpen);
   const moved = Object.keys(placement).length > 0;
 
+  // The stage is a picture to watch and handle, not text to select: a selection that
+  // starts on it anyway (a sweep over the canvas) is refused. The card's text stays
+  // selectable. (React has no handler for selectstart, so it is a native listener.)
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const refuse = (event: Event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target?.closest(".node-card")) event.preventDefault();
+    };
+    stage.addEventListener("selectstart", refuse);
+    return () => stage.removeEventListener("selectstart", refuse);
+  }, [stageRef]);
+
   // A card closes with Escape or a click anywhere outside the nodes and cards.
   useEffect(() => {
     if (!open) return;
@@ -311,7 +325,11 @@ function useNodeDrag(
     if (drag.current?.moved) lastMove.current = performance.now();
     drag.current = null;
     setDragging(null);
+    document.documentElement.classList.remove("is-dragging-node");
   }, []);
+
+  // Leaving the page mid-drag must not leave selection switched off.
+  useEffect(() => () => document.documentElement.classList.remove("is-dragging-node"), []);
 
   useEffect(() => {
     if (!dragging) return;
@@ -335,6 +353,10 @@ function useNodeDrag(
         if (event.button !== 0 || drag.current) return;
         const box = stageRef.current?.getBoundingClientRect();
         if (!box) return;
+        // A press on a node is a click or a drag, never the start of a text selection.
+        // The click that opens the card still follows.
+        event.preventDefault();
+        window.getSelection()?.removeAllRanges();
         event.currentTarget.setPointerCapture(event.pointerId);
         drag.current = {
           id,
@@ -356,6 +378,10 @@ function useNodeDrag(
           current.moved = true;
           setDragging(current.id);
           setOpen(null);
+          // Some browsers still begin a selection as the pointer sweeps over the canvas;
+          // switch selection off for the page while the node is held.
+          document.documentElement.classList.add("is-dragging-node");
+          window.getSelection()?.removeAllRanges();
         }
         const box = stageRef.current?.getBoundingClientRect();
         if (!box || box.width === 0 || box.height === 0) return;
@@ -755,7 +781,7 @@ function StatusLine(props: {
           className="text-button"
           onClick={() => {
             // The button goes away once nothing is moved; keep focus in the status line.
-            lineRef.current?.focus();
+            lineRef.current?.focus({ preventScroll: true });
             onResetLayout();
           }}
         >

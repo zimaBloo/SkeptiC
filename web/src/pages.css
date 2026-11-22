@@ -686,6 +686,26 @@ code {
     radial-gradient(ellipse 120% 100% at 50% 50%, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.32) 100%);
 }
 
+/* The stage is never selected as text: a press on a node that turns into a drag would
+   otherwise sweep a selection across the canvas and paint the whole panel. The card's
+   facts stay selectable, and while a node is held nothing on the page is. */
+.run-stage {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.run-stage .node-card {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.is-dragging-node,
+.is-dragging-node * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
 .graticule {
   position: absolute;
   inset: 0;

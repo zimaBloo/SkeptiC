@@ -167,6 +167,7 @@ export class FlowField {
    * carry on along the new paths. */
   setPlacement(placement: Placement): void {
     const before = this.curves;
+    const beforeNodes = CLOUD_NODES.map((_, node) => ({ ...this.nodePoint(node) }));
     this.placement = placement;
     this.layout = layout(this.layout.width, this.layout.height, placement);
     this.curves = STREAMS.map((id) => curve(this.layout, id));
@@ -181,6 +182,14 @@ export class FlowField {
       if (moved(old.p0, c.p0) || moved(old.p3, c.p3)) jumped.add(i);
     });
     if (jumped.size) for (const p of this.particles) if (jumped.has(p.stream)) p.fresh = true;
+    // A cloud whose node jumps starts again where the node now is, rather than drawing
+    // a streak from the old place.
+    const movedNodes = new Set<number>();
+    beforeNodes.forEach((old, node) => {
+      const now = this.nodePoint(node);
+      if (Math.hypot(now.x - old.x, now.y - old.y) > 24) movedNodes.add(node);
+    });
+    if (movedNodes.size) for (const c of this.cloud) if (movedNodes.has(c.node)) c.fresh = true;
   }
 
   /** Set each finished step's cloud size. Streaks that reach a finished node join its
