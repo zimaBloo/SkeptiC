@@ -1,9 +1,30 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type Dispatch,
+  type KeyboardEvent,
+  type PointerEvent,
+  type RefObject,
+  type SetStateAction,
+} from "react";
 import { Link, useParams } from "react-router";
 import { CRITICS, api, type CriticName, type PanelRecord, type RunDetail } from "../api";
 import { FlowCanvas } from "../flow/FlowCanvas";
 import type { Intensities } from "../flow/field";
-import { labelRoom, labelSide, layout, type Layout } from "../flow/geometry";
+import {
+  clampToStage,
+  labelRoom,
+  labelSide,
+  layout,
+  type Layout,
+  type NodeId,
+  type Placement,
+  type Point,
+} from "../flow/geometry";
 import {
   CUT_OFF,
   currentStep,
@@ -17,7 +38,7 @@ import {
   type Timeline,
 } from "../flow/timeline";
 import { CRITIC_TITLES, modelName } from "../format";
-import { useNow, useReducedMotion, useRevealGuard, useRun, useSize } from "../hooks";
+import { useNow, usePlacement, useReducedMotion, useRevealGuard, useRun, useSize } from "../hooks";
 import { Verdict } from "./Verdict";
 
 const REPLAY_SPEED = 8;
@@ -30,6 +51,7 @@ export function RunPage() {
   const reduce = useReducedMotion();
   const [stageRef, size] = useSize<HTMLDivElement>();
   const [replayFrom, setReplayFrom] = useState<number | null>(null);
+  const [placement, setPlacement] = usePlacement();
 
   const record = run?.record ?? null;
   const live = run?.status === "running";
@@ -74,7 +96,9 @@ export function RunPage() {
 
   const showResult = ended && !replaying && !settling;
   const intensities = useMemo(() => intensitiesFor(states, showResult), [states, showResult]);
-  const l = size.width > 0 ? layout(size.width, size.height) : null;
+  const l = size.width > 0 ? layout(size.width, size.height, placement) : null;
+  const { dragging, dragHandlers } = useNodeDrag(stageRef, placement, setPlacement, !showResult && l !== null);
+  const moved = Object.keys(placement).length > 0;
   const verdict = run?.status === "success" && record?.combiner.combined ? record : null;
 
   return (
@@ -83,8 +107,10 @@ export function RunPage() {
         className={`run-field${showResult ? " is-dim" : ""}`}
         intensities={intensities}
         still={reduce}
+        placement={placement}
+        holdPointer={dragging !== null}
       />
-      <div className="run-stage" ref={stageRef}>
+      <div className={`run-stage${dragging ? " is-dragging" : ""}`} ref={stageRef}>
         {l && run && (
           <NodeLabels
             layout={l}
@@ -93,6 +119,9 @@ export function RunPage() {
             states={states}
             at={at}
             quiet={showResult}
+            dragging={dragging}
+            dragHandlers={dragHandlers}
+            ideaMoved={placement.idea !== undefined}
           />
         )}
       </div>
@@ -115,9 +144,140 @@ export function RunPage() {
         replaying={replaying}
         settling={settling}
         onStop={live && id ? () => api.stopRun(id).then(() => undefined) : undefined}
+        onResetLayout={moved ? () => setPlacement({}) : undefined}
       />
     </div>
   );
+}
+
+type DragHandlers = Partial<{
+  onPointerDown: (event: PointerEvent<HTMLDivElement>) => void;
+  onPointerMove: (event: PointerEvent<HTMLDivElement>) => void;
+  onPointerUp: (event: PointerEvent<HTMLDivElement>) => void;
+  onPointerCancel: (event: PointerEvent<HTMLDivElement>) => void;
+  onLostPointerCapture: (event: PointerEvent<HTMLDivElement>) => void;
+  onDoubleClick: () => void;
+  title: string;
+}>;
+
+interface Drag {
+  id: NodeId;
+  pointerId: number;
+  /** Where the press began; it becomes a drag only once the pointer has moved a little. */
+  startX: number;
+  startY: number;
+  threshold: number;
+  moved: boolean;
+  /** Where on the node it was grabbed, so it does not jump to the pointer. */
+  dx: number;
+  dy: number;
+  /** The arrangement before the drag, for Escape. */
+  before: Placement;
+}
+
+/** How far a press must travel before it moves the node: a click's wobble or a tap
+ * should not pin a node in place. */
+const DRAG_THRESHOLD = { mouse: 4, other: 8 };
+
+/** Dragging the run page's nodes: grab a node's dot or label and move it; Escape puts
+ * it back where the drag began; a double-click returns it to its own place. */
+function useNodeDrag(
+  stageRef: RefObject<HTMLDivElement | null>,
+  placement: Placement,
+  setPlacement: Dispatch<SetStateAction<Placement>>,
+  enabled: boolean,
+): { dragging: NodeId | null; dragHandlers: (id: NodeId, at: Point) => DragHandlers } {
+  const [dragging, setDragging] = useState<NodeId | null>(null);
+  const drag = useRef<Drag | null>(null);
+  // When the last real drag ended: a double-click right after one is the tail of the
+  // drag (press, move, release, press), not a request to put the node back.
+  const lastMove = useRef(0);
+  const end = useCallback(() => {
+    if (drag.current?.moved) lastMove.current = performance.now();
+    drag.current = null;
+    setDragging(null);
+  }, []);
+
+  useEffect(() => {
+    if (!dragging) return;
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || !drag.current) return;
+      if (drag.current.moved) setPlacement(drag.current.before);
+      end();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [dragging, end, setPlacement]);
+
+  // When the run's result comes in, the nodes fade out; a drag in progress ends there.
+  useEffect(() => {
+    if (!enabled && drag.current) end();
+  }, [enabled, end]);
+
+  const dragHandlers = (id: NodeId, at: Point): DragHandlers => {
+    if (!enabled) return {};
+    return {
+      title: "Drag to move. Double-click to put it back.",
+      onPointerDown: (event) => {
+        if (event.button !== 0 || drag.current) return;
+        const box = stageRef.current?.getBoundingClientRect();
+        if (!box) return;
+        event.preventDefault();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        drag.current = {
+          id,
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          threshold: event.pointerType === "mouse" ? DRAG_THRESHOLD.mouse : DRAG_THRESHOLD.other,
+          moved: false,
+          dx: event.clientX - box.left - at.x,
+          dy: event.clientY - box.top - at.y,
+          before: placement,
+        };
+      },
+      onPointerMove: (event) => {
+        const current = drag.current;
+        if (!current || current.pointerId !== event.pointerId) return;
+        if (!current.moved) {
+          if (Math.hypot(event.clientX - current.startX, event.clientY - current.startY) < current.threshold) return;
+          current.moved = true;
+          setDragging(current.id);
+        }
+        const box = stageRef.current?.getBoundingClientRect();
+        if (!box || box.width === 0 || box.height === 0) return;
+        const point = clampToStage(box.width, box.height, {
+          x: event.clientX - box.left - current.dx,
+          y: event.clientY - box.top - current.dy,
+        });
+        setPlacement((previous) => ({
+          ...previous,
+          [current.id]: { fx: point.x / box.width, fy: point.y / box.height },
+        }));
+      },
+      onPointerUp: (event) => {
+        if (drag.current?.pointerId === event.pointerId) end();
+      },
+      onPointerCancel: (event) => {
+        if (drag.current?.pointerId !== event.pointerId) return;
+        if (drag.current.moved) setPlacement(drag.current.before);
+        end();
+      },
+      onLostPointerCapture: (event) => {
+        if (drag.current?.pointerId === event.pointerId) end();
+      },
+      onDoubleClick: () => {
+        if (performance.now() - lastMove.current < 800) return;
+        setPlacement((previous) => {
+          const next = { ...previous };
+          delete next[id];
+          return next;
+        });
+      },
+    };
+  };
+
+  return { dragging, dragHandlers };
 }
 
 /** How strongly each stream flows, from where every step stands. Only running steps
@@ -141,25 +301,48 @@ interface LabelProps {
   states: Record<StepName, StepState>;
   at: number;
   quiet: boolean;
+  dragging: NodeId | null;
+  dragHandlers: (id: NodeId, at: Point) => DragHandlers;
+  ideaMoved: boolean;
 }
 
-function NodeLabels({ layout: l, run, timeline, states, at, quiet }: LabelProps) {
+/** Where the idea's title sits: centred under its node, or against the screen's edge
+ * when the node is near it. On a phone, in its own place, it ends before the critics. */
+function ideaLabelBox(l: Layout, moved: boolean): { left: number; width: number; align: "left" | "center" | "right" } {
+  const gutter = 16;
+  const max = !moved && l.compact ? Math.max(120, l.critics.market.x - 28) : 230;
+  const width = Math.max(80, Math.min(max, l.width - 2 * gutter));
+  const centred = l.idea.x - width / 2;
+  const start = Math.min(Math.max(centred, gutter), l.width - gutter - width);
+  const align = start > centred + 0.5 ? "left" : start < centred - 0.5 ? "right" : "center";
+  return { left: start - l.idea.x, width, align };
+}
+
+function NodeLabels({ layout: l, run, timeline, states, at, quiet, dragging, dragHandlers, ideaMoved }: LabelProps) {
+  const lifted = (id: NodeId) => (dragging === id ? " is-dragging" : "");
+  const ideaBox = ideaLabelBox(l, ideaMoved);
+  // The verdict's label sits to the right of its node; dragged near the right edge it
+  // moves to the left (above the node on a phone, growing whichever way has room).
+  const verdictRoom = l.width - l.combiner.x - 36;
+  const verdictFlip = l.compact ? l.combiner.x < 180 : verdictRoom < 100;
   return (
-    <div className={`node-labels${quiet ? " is-quiet" : ""}`}>
+    <div className={`node-labels${quiet ? " is-quiet" : " is-draggable"}`}>
       <div
-        className="node node--idea"
-        style={
-          {
-            left: l.idea.x,
-            top: l.idea.y,
-            "--edge": `${l.idea.x - 16}px`,
-            // On a phone the title ends before the critics' column.
-            "--label-max": `${Math.max(120, l.critics.market.x - 28)}px`,
-          } as CSSProperties
-        }
+        {...dragHandlers("idea", l.idea)}
+        className={`node node--idea${lifted("idea")}`}
+        style={{ left: l.idea.x, top: l.idea.y }}
       >
         <span className="node-ring" data-state="done" />
-        <div className={`node-text node-text--below${l.compact ? " node-text--start" : ""}`} data-quiet>
+        <div
+          className="node-text node-text--below node-text--placed"
+          style={{
+            left: ideaBox.left,
+            width: ideaBox.width,
+            textAlign: ideaBox.align,
+            alignItems: ideaBox.align === "left" ? "flex-start" : ideaBox.align === "right" ? "flex-end" : "center",
+          }}
+          data-quiet
+        >
           <span className="node-title">{run.idea_title}</span>
         </div>
       </div>
@@ -173,19 +356,32 @@ function NodeLabels({ layout: l, run, timeline, states, at, quiet }: LabelProps)
           timeline={timeline}
           x={l.critics[critic].x}
           y={l.critics[critic].y}
-          room={labelRoom(l, critic)}
+          room={l.width - l.critics[critic].x - 40 < 120 ? Math.max(60, l.critics[critic].x - 40) : labelRoom(l, critic)}
           side={labelSide(l, critic)}
+          flip={l.width - l.critics[critic].x - 40 < 120}
+          lifted={dragging === critic}
+          handlers={dragHandlers(critic, l.critics[critic])}
         />
       ))}
       {states.combiner !== "waiting" && (
         <div
-          className="node node--combiner"
-          style={{ left: l.combiner.x, top: l.combiner.y, "--room": `${l.width - l.combiner.x - 36}px` } as CSSProperties}
+          {...dragHandlers("combiner", l.combiner)}
+          className={`node node--combiner${lifted("combiner")}`}
+          style={
+            {
+              left: l.combiner.x,
+              top: l.combiner.y,
+              "--room": `${Math.max(60, verdictFlip ? l.combiner.x - 40 : verdictRoom)}px`,
+            } as CSSProperties
+          }
         >
           <span className="node-ring" data-state={states.combiner} />
           {/* Every stream reaches the verdict from the left, so its label sits to the
               right (above it on a phone), in short lines that fit the space there. */}
-          <div className={`node-text ${l.compact ? "node-text--above" : "node-text--right"}`} data-quiet>
+          <div
+            className={`node-text ${l.compact ? "node-text--above" : "node-text--right"}${verdictFlip ? (l.compact ? " is-start" : " is-left") : ""}`}
+            data-quiet
+          >
             <span className="node-title">Verdict</span>
             {l.compact ? (
               // On a phone two lines, so the label stays clear of the critics' labels.
@@ -217,8 +413,12 @@ function CriticNode(props: {
   y: number;
   room: number;
   side: "above" | "below";
+  /** Near the right edge the label goes to the left of the node. */
+  flip: boolean;
+  lifted: boolean;
+  handlers: DragHandlers;
 }) {
-  const { critic, state, timeline, at, x, y, room, side } = props;
+  const { critic, state, timeline, at, x, y, room, side, flip, lifted, handlers } = props;
   const step = timeline.steps[critic];
   const seconds = stepSeconds(step, at);
   let meta = stepLine(state, step.model, seconds);
@@ -228,13 +428,14 @@ function CriticNode(props: {
   }
   return (
     <div
-      className="node node--critic"
+      {...handlers}
+      className={`node node--critic${lifted ? " is-dragging" : ""}`}
       data-critic={critic}
       data-state={state}
       style={{ left: x, top: y, "--room": `${room}px` } as CSSProperties}
     >
       <span className="node-ring" data-state={state} />
-      <div className={`node-text node-text--right is-${side}`} data-quiet>
+      <div className={`node-text node-text--right is-${side}${flip ? " is-left" : ""}`} data-quiet>
         <span className="node-title">{CRITIC_TITLES[critic]}</span>
         <span className="node-meta mono">{meta}</span>
       </div>
@@ -280,8 +481,10 @@ function StatusLine(props: {
   replaying: boolean;
   settling: boolean;
   onStop?: () => Promise<void>;
+  onResetLayout?: () => void;
 }) {
-  const { id, run, error, missing, timeline, states, at, replaying, settling, onStop } = props;
+  const { id, run, error, missing, timeline, states, at, replaying, settling, onStop, onResetLayout } = props;
+  const lineRef = useRef<HTMLDivElement>(null);
   if (missing) {
     return (
       <p className="status-line" role="alert">
@@ -322,11 +525,24 @@ function StatusLine(props: {
           : "Ended";
 
   return (
-    <div className="status-line">
+    <div className="status-line" ref={lineRef} tabIndex={-1}>
       <span className="mono">{label}</span>
       <span className="mono">{formatSeconds(elapsed)}</span>
       <span role="status">{what}</span>
       {onStop && !settling && <StopControl onStop={onStop} />}
+      {onResetLayout && (
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => {
+            // The button goes away once nothing is moved; keep focus in the status line.
+            lineRef.current?.focus();
+            onResetLayout();
+          }}
+        >
+          Reset layout
+        </button>
+      )}
     </div>
   );
 }

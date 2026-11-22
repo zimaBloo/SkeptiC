@@ -13,6 +13,7 @@ import {
   pointAt,
   type Curve,
   type Layout,
+  type Placement,
   type StreamId,
 } from "./geometry";
 
@@ -73,6 +74,7 @@ export class FlowField {
   private readonly colours: string[];
   private readonly particles: Particle[] = [];
   private layout: Layout = layout(1, 1);
+  private placement: Placement = {};
   private curves: Curve[] = [];
   private lengths: number[] = [];
   private dpr = 1;
@@ -105,7 +107,7 @@ export class FlowField {
     this.dpr = dpr;
     this.canvas.width = Math.round(width * dpr);
     this.canvas.height = Math.round(height * dpr);
-    this.layout = layout(width, height);
+    this.layout = layout(width, height, this.placement);
     this.curves = STREAMS.map((id) => curve(this.layout, id));
     this.lengths = this.curves.map((c) => curveLength(c));
     for (const p of this.particles) p.fresh = true;
@@ -120,6 +122,26 @@ export class FlowField {
       // Start already flowing: spread every streak along the streams that have work.
       for (let k = 0; k < this.particles.length; k++) this.particles[k] = this.spawn(true);
     }
+  }
+
+  /** Move nodes the viewer has dragged; streams follow at once and the streaks on them
+   * carry on along the new paths. */
+  setPlacement(placement: Placement): void {
+    const before = this.curves;
+    this.placement = placement;
+    this.layout = layout(this.layout.width, this.layout.height, placement);
+    this.curves = STREAMS.map((id) => curve(this.layout, id));
+    this.lengths = this.curves.map((c) => curveLength(c));
+    // A node that jumps (put back, reset, a fast flick) would draw every streak on its
+    // streams as a long straight line from the old place; those streaks start afresh.
+    const jumped = new Set<number>();
+    this.curves.forEach((c, i) => {
+      const old = before[i];
+      if (!old) return;
+      const moved = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y) > 24;
+      if (moved(old.p0, c.p0) || moved(old.p3, c.p3)) jumped.add(i);
+    });
+    if (jumped.size) for (const p of this.particles) if (jumped.has(p.stream)) p.fresh = true;
   }
 
   setPointer(point: { x: number; y: number } | null): void {

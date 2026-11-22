@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { CRITICS } from "../api";
 import { FlowField, type Intensities, type StreamColours } from "./field";
-import type { StreamId } from "./geometry";
+import type { Placement, StreamId } from "./geometry";
 
 interface Props {
   intensities: Intensities;
@@ -9,14 +9,32 @@ interface Props {
   still?: boolean;
   className?: string;
   count?: number;
+  /** Nodes the viewer has dragged away from their places. */
+  placement?: Placement;
+  /** While true the pointer does not push streaks aside (a node is being dragged). */
+  holdPointer?: boolean;
 }
 
+const NO_PLACEMENT: Placement = {};
+
 /** The flow field on a canvas that fills its parent. */
-export function FlowCanvas({ intensities, still = false, className, count }: Props) {
+export function FlowCanvas({
+  intensities,
+  still = false,
+  className,
+  count,
+  placement = NO_PLACEMENT,
+  holdPointer = false,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fieldRef = useRef<FlowField | null>(null);
   const intensitiesRef = useRef(intensities);
   intensitiesRef.current = intensities;
+  const placementRef = useRef(placement);
+  placementRef.current = placement;
+  const holdRef = useRef(holdPointer);
+  holdRef.current = holdPointer;
+  const measureRef = useRef<(() => void) | null>(null);
   // The first intensities with any flow are applied at once, spread along the streams,
   // so a page opened in the middle of a run shows it already flowing.
   const primed = useRef(false);
@@ -26,6 +44,7 @@ export function FlowCanvas({ intensities, still = false, className, count }: Pro
     if (!canvas) return;
     const field = new FlowField(canvas, { colours: streamColours(canvas), count });
     fieldRef.current = field;
+    field.setPlacement(placementRef.current);
     field.setIntensities(intensitiesRef.current, true);
     primed.current = hasFlow(intensitiesRef.current);
 
@@ -52,6 +71,7 @@ export function FlowCanvas({ intensities, still = false, className, count }: Pro
         }),
       );
     };
+    measureRef.current = measureLabels;
     const labelTimer = window.setInterval(() => {
       measureLabels();
       if (still) field.drawStill();
@@ -83,6 +103,10 @@ export function FlowCanvas({ intensities, still = false, className, count }: Pro
     document.addEventListener("visibilitychange", onVisibility);
 
     const onMove = (event: PointerEvent) => {
+      if (holdRef.current) {
+        field.setPointer(null);
+        return;
+      }
       const rect = canvas.getBoundingClientRect();
       field.setPointer({ x: event.clientX - rect.left, y: event.clientY - rect.top });
     };
@@ -102,6 +126,7 @@ export function FlowCanvas({ intensities, still = false, className, count }: Pro
       window.removeEventListener("pointermove", onMove);
       document.documentElement.removeEventListener("pointerleave", onLeave);
       fieldRef.current = null;
+      measureRef.current = null;
     };
   }, [still, count]);
 
@@ -113,6 +138,19 @@ export function FlowCanvas({ intensities, still = false, className, count }: Pro
     if (flowing) primed.current = true;
     if (still) field.drawStill();
   }, [intensities, still]);
+
+  useEffect(() => {
+    const field = fieldRef.current;
+    if (!field) return;
+    field.setPlacement(placement);
+    if (still) field.drawStill();
+    // The labels move with their nodes; clear the streaks from their new places.
+    const frame = requestAnimationFrame(() => {
+      measureRef.current?.();
+      if (still) field.drawStill();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [placement, still]);
 
   return <canvas ref={canvasRef} className={className} aria-hidden="true" />;
 }

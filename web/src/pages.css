@@ -357,7 +357,8 @@ code {
   transform: translate(-50%, -50%);
   transition:
     border-color 400ms ease,
-    background-color 400ms ease;
+    background-color 400ms ease,
+    transform 160ms var(--ease-out);
 }
 
 .node-ring[data-state="working"] {
@@ -389,12 +390,47 @@ code {
    place, then its label comes into focus. The stream reaches it a moment later. */
 .run-stage .node--critic .node-ring,
 .run-stage .node--combiner .node-ring {
-  animation: node-pop 460ms var(--ease-out) both;
+  animation: node-pop 460ms var(--ease-out) backwards;
 }
 
 .run-stage .node--critic .node-text,
 .run-stage .node--combiner .node-text {
-  animation: label-in 380ms var(--ease-out) 110ms both;
+  animation: label-in 380ms var(--ease-out) 110ms backwards;
+}
+
+/* Nodes on the run page can be dragged by their dot or their label. The dot gets a
+   larger, invisible hit area, lifts a little under the pointer and more while held. */
+.run-stage .node-labels.is-draggable .node-ring,
+.run-stage .node-labels.is-draggable .node-text {
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.run-stage .node-labels.is-draggable .node-ring::before {
+  content: "";
+  position: absolute;
+  inset: -11px;
+  border-radius: 50%;
+}
+
+.run-stage.is-dragging,
+.run-stage .node.is-dragging,
+.run-stage .node.is-dragging .node-ring,
+.run-stage .node.is-dragging .node-text {
+  cursor: grabbing;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .run-stage .node-labels.is-draggable .node:hover .node-ring {
+    transform: translate(-50%, -50%) scale(1.25);
+  }
+}
+
+.run-stage .node.is-dragging .node-ring {
+  transform: translate(-50%, -50%) scale(1.35);
 }
 
 @keyframes node-pop {
@@ -450,6 +486,19 @@ code {
   transform: none;
 }
 
+/* A node dragged near the right edge keeps its label on screen, to its left. */
+.node-text--right.is-left {
+  left: auto;
+  right: 20px;
+  align-items: flex-end;
+  text-align: right;
+}
+
+.node-text--right.is-left.is-above,
+.node-text--right.is-left.is-below {
+  right: 14px;
+}
+
 .node-text--right {
   max-width: var(--room, none);
 }
@@ -479,10 +528,11 @@ code {
   max-width: 230px;
 }
 
-/* The idea's title is centred under its node, never wider than the room to the
-   screen's edge; on a phone it starts at the gutter instead. */
-.node--idea .node-text--below {
-  max-width: min(230px, calc(2 * var(--edge, 115px)));
+/* On the run page the idea's title is placed in code (RunPage ideaLabelBox): centred
+   under its node, or against the screen's edge when the node is near it. */
+.node-text--placed {
+  transform: none;
+  max-width: none;
 }
 
 /* On a phone the verdict's node sits near the right edge, so its label (above it)
@@ -495,12 +545,12 @@ code {
   text-align: right;
 }
 
-.node--idea .node-text--start {
-  left: calc(-1 * var(--edge, 0px));
-  transform: none;
+/* A phone's verdict node dragged near the left edge: its label grows to the right. */
+.node--combiner .node-text--above.is-start {
+  left: -15px;
+  right: auto;
   align-items: flex-start;
   text-align: left;
-  max-width: min(230px, var(--label-max, 46vw));
 }
 
 .node-title {
@@ -551,6 +601,10 @@ code {
 .run-stage {
   position: absolute;
   inset: 0;
+}
+
+.status-line:focus {
+  outline: none;
 }
 
 .status-line {
