@@ -12,12 +12,14 @@ import {
   type SetStateAction,
 } from "react";
 import { Link } from "react-router";
-import { CRITICS, api, type CriticName, type PanelRecord, type RunDetail } from "../api";
+import { CRITICS, api, type CriticName, type PanelRecord, type RunDetail, type Usage } from "../api";
 import type { Clouds, Intensities } from "../flow/field";
 import { FlowCanvas } from "../flow/FlowCanvas";
 import { Graticule } from "../flow/Graticule";
 import { NodeIcon } from "../flow/NodeIcon";
 import {
+  bandBounds,
+  bandInset,
   clampToStage,
   labelRoom,
   layout,
@@ -160,18 +162,24 @@ function intensitiesFor(states: Record<StepName, StepState>): Intensities {
   return out;
 }
 
-/** A finished step's cloud: bigger the more tokens it used. A step that does not report
- * its tokens gets a modest cloud. */
-export function cloudSize(tokens: number | null): number {
-  if (tokens === null) return 0.35;
-  return Math.min(1, Math.max(0.18, Math.sqrt(tokens / 9000)));
+/** One speck in a critic's cloud stands for this many tokens the critic wrote. */
+export const TOKENS_PER_SPECK = 20;
+
+/** A finished critic's cloud, in specks: one for every TOKENS_PER_SPECK tokens it wrote
+ * (its reply, and its reasoning where the model reasons first). The tokens it read are
+ * left out: every critic reads the same idea, so they would add about the same to each
+ * cloud and hide the difference. A step that reported no tokens gets no cloud. */
+export function cloudSpecks(usage: Usage | null | undefined): number {
+  const written = usage?.output_tokens;
+  if (written == null || written <= 0) return 0;
+  return Math.max(1, Math.round(written / TOKENS_PER_SPECK));
 }
 
 function cloudsFor(timeline: Timeline, states: Record<StepName, StepState>): Clouds {
   const clouds: Clouds = {};
   // Only critics gather clouds: the verdict is the outlet the flow leaves through.
   for (const name of CRITICS) {
-    if (states[name] === "done") clouds[name] = cloudSize(stepTokens(timeline.steps[name]));
+    if (states[name] === "done") clouds[name] = cloudSpecks(timeline.steps[name].usage);
   }
   return clouds;
 }
@@ -473,7 +481,10 @@ function NodeLabels({ layout: l, run, timeline, states, at, dragging, dragHandle
       : `${modelName(combiner.model)} · ${verdictState(states.combiner, seconds)}`;
   return (
     <div className="node-labels is-draggable">
-      <PanelBand layout={l} />
+      <PanelBand
+        layout={l}
+        cloudKey={CRITICS.some((c) => states[c] === "done" && cloudSpecks(timeline.steps[c].usage) > 0)}
+      />
       <Port
         id="idea"
         capsule={l.inlet}
@@ -513,17 +524,26 @@ function NodeLabels({ layout: l, run, timeline, states, at, dragging, dragHandle
   );
 }
 
-/** The band the four critics work in, between the inlet and the outlet. Its label sits
- * above the critics; on a phone their own labels hang below them, so the band reaches
- * further down there. */
-export function PanelBand({ layout: l }: { layout: Layout }) {
-  const height = l.compact ? 172 : 168;
-  const top = l.compact ? l.row - 82 : l.row - height / 2 - 14;
+/** The band the four critics work in, between the inlet and the outlet. It wraps the
+ * critics wherever they are dragged. Once a critic has a cloud, a key in its corner says
+ * what the clouds count. */
+export function PanelBand({ layout: l, cloudKey = false }: { layout: Layout; cloudKey?: boolean }) {
+  const { top, bottom } = bandBounds(l);
+  const inset = bandInset(l.width);
   return (
-    <div className="panel-band" style={{ top, height }} aria-hidden="true">
+    <div className="panel-band" style={{ top, height: bottom - top, left: inset, right: inset }} aria-hidden="true">
       <span className="panel-band-label" data-quiet>
-        The panel{l.compact ? "" : " · four critics, each blind to the others"}
+        <span className="panel-band-title">The panel</span>
+        {!l.compact && <span className="panel-band-sub">four critics, each blind to the others</span>}
       </span>
+      {cloudKey && (
+        <span className="panel-band-key" data-quiet>
+          <span className="panel-band-speck" />
+          {l.compact
+            ? `= ${TOKENS_PER_SPECK} tokens written`
+            : `one speck in a cloud = ${TOKENS_PER_SPECK} tokens the critic wrote`}
+        </span>
+      )}
     </div>
   );
 }
@@ -713,7 +733,7 @@ function NodeCard(props: {
       if (tokens !== null && step.usage) {
         rows.push([
           "Tokens",
-          `${formatTokens(tokens)} (${formatTokens(step.usage.input_tokens)} in, ${formatTokens(step.usage.output_tokens)} out)`,
+          `${formatTokens(tokens)} (${formatTokens(step.usage.input_tokens)} read, ${formatTokens(step.usage.output_tokens)} written)`,
         ]);
       }
       if (step.usage?.cost != null) rows.push(["Cost", formatCost(step.usage.cost)]);

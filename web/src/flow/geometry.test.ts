@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CRITICS } from "../api";
-import { CAPSULE_HEIGHT, clampToStage, curve, labelRoom, layout } from "./geometry";
+import { CAPSULE_HEIGHT, bandBounds, bandInset, clampToStage, curve, labelRoom, layout } from "./geometry";
 
 describe("layout with dragged nodes", () => {
   it("puts a dragged node at its fraction of the stage and leaves the others in place", () => {
@@ -18,8 +18,8 @@ describe("layout with dragged nodes", () => {
   });
 
   it("keeps a dragged critic clear of the stage's edges, the inlet and the outlet", () => {
-    expect(clampToStage(1440, 900, { x: -50, y: 10 })).toEqual({ x: 28, y: 140 });
-    expect(clampToStage(1440, 900, { x: 5000, y: 5000 })).toEqual({ x: 1412, y: 718 });
+    expect(clampToStage(1440, 900, { x: -50, y: 10 })).toEqual({ x: 74, y: 162 });
+    expect(clampToStage(1440, 900, { x: 5000, y: 5000 })).toEqual({ x: 1366, y: 708 });
     const l = layout(1440, 900, { market: { fx: 0, fy: 0 }, technical: { fx: 1, fy: 1 } });
     expect(l.critics.market.y).toBeGreaterThan(l.inlet.y + CAPSULE_HEIGHT / 2);
     expect(l.critics.technical.y).toBeLessThan(l.outlet.y - CAPSULE_HEIGHT / 2);
@@ -46,6 +46,38 @@ describe("layout with dragged nodes", () => {
     expect(Math.max(...xs)).toBeLessThan(l.inlet.x + l.inlet.width / 2);
   });
 
+  it("keeps the band around the critics' row until one is dragged out of it", () => {
+    const l = layout(1440, 900);
+    expect(bandBounds(l)).toEqual({ top: l.row - 98, bottom: l.row + 70 });
+  });
+
+  it("grows the band to wrap a critic dragged up or down, and shrinks it back", () => {
+    const plain = bandBounds(layout(1440, 900));
+    const up = bandBounds(layout(1440, 900, { market: { fx: 0.3, fy: 0.25 } }));
+    const down = bandBounds(layout(1440, 900, { risk: { fx: 0.7, fy: 0.75 } }));
+    expect(up.top).toBe(0.25 * 900 - 98);
+    expect(up.bottom).toBe(plain.bottom);
+    expect(down.bottom).toBe(0.75 * 900 + 70);
+    expect(down.top).toBe(plain.top);
+  });
+
+  it("keeps every dragged critic inside the band, and the band clear of the capsules", () => {
+    for (const [width, height] of [
+      [1440, 900],
+      [375, 760],
+    ] as const) {
+      const corners = { market: { fx: 0, fy: 0 }, technical: { fx: 1, fy: 1 }, customer: { fx: 0, fy: 1 } };
+      const l = layout(width, height, corners);
+      const band = bandBounds(l);
+      expect(band.top).toBeGreaterThanOrEqual(l.inlet.y + CAPSULE_HEIGHT / 2);
+      expect(band.bottom).toBeLessThanOrEqual(l.outlet.y - CAPSULE_HEIGHT / 2);
+      for (const c of CRITICS) {
+        expect(l.critics[c].y - band.top).toBeGreaterThanOrEqual(64);
+        expect(band.bottom - l.critics[c].y).toBeGreaterThanOrEqual(46);
+      }
+    }
+  });
+
   it("fits the capsules inside a phone's width", () => {
     const l = layout(375, 760);
     expect(l.compact).toBe(true);
@@ -68,14 +100,22 @@ describe("layout with dragged nodes", () => {
     expect(curve(moved, "out:risk").p0).toEqual(moved.critics.risk);
   });
 
-  it("ends a critic's label before the next critic in the row, the last one at the edge", () => {
+  it("ends a critic's label before the next critic in the row, the last one inside the band", () => {
     const l = layout(1440, 900);
     expect(labelRoom(l, "market")).toBe(l.critics.technical.x - l.critics.market.x - 44);
-    expect(labelRoom(l, "risk")).toBe(1440 - 12 - l.critics.risk.x - 44);
+    expect(labelRoom(l, "risk")).toBe(1440 - 40 - 14 - l.critics.risk.x - 44);
   });
 
-  it("gives a critic dragged out of the row room up to the screen's edge", () => {
+  it("gives a critic dragged out of the row room up to the band's edge", () => {
     const moved = layout(1440, 900, { market: { fx: 0.3, fy: 0.3 } });
-    expect(labelRoom(moved, "market")).toBe(1440 - 12 - 432 - 44);
+    expect(labelRoom(moved, "market")).toBe(1440 - 40 - 14 - 432 - 44);
+  });
+
+  it("keeps a critic dragged to the side inside the band", () => {
+    for (const width of [1440, 375]) {
+      const l = layout(width, 900, { market: { fx: 0, fy: 0.5 }, risk: { fx: 1, fy: 0.5 } });
+      expect(l.critics.market.x).toBeGreaterThanOrEqual(bandInset(width) + 34);
+      expect(l.critics.risk.x).toBeLessThanOrEqual(width - bandInset(width) - 34);
+    }
   });
 });

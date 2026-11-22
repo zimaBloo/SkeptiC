@@ -56,10 +56,34 @@ const outletBottom = (width: number) => (isCompact(width) ? 140 : 76);
 /** Narrow screens: the critics sit close together, so their labels go below them. */
 const isCompact = (width: number) => width < 720;
 
-/** Margins a dragged critic keeps from the stage's edges: clear of the inlet above and the
- * outlet below, with room for its label. */
+/** The critics' band: the room it keeps from the capsules, and how far it reaches past
+ * the critics, above for its own label and below for theirs (beside them on wide screens,
+ * under them on phones). */
+const BAND_GAP = 14;
+const BAND_ABOVE = { wide: 98, compact: 82 };
+const BAND_BELOW = { wide: 70, compact: 90 };
+/** The least room a critic keeps inside the band when dragged to its edge: its ring clear
+ * of the band's label row above, and its ring and label below. */
+const NODE_ABOVE = 64;
+const NODE_BELOW = { wide: 46, compact: 78 };
+
+/** How far the band sits in from the stage's sides. */
+export function bandInset(width: number): number {
+  return Math.min(40, Math.max(12, width * 0.03));
+}
+
+/** The least room a critic keeps from the band's sides: its ring and the cloud's inner edge. */
+const NODE_SIDE = 34;
+
+/** Margins a dragged critic keeps from the stage's edges, so it stays inside the band and
+ * the band stays clear of the inlet above and the outlet below. */
 function edges(width: number) {
-  return { side: 28, top: INLET_TOP + CAPSULE_HEIGHT + 56, bottom: outletBottom(width) + CAPSULE_HEIGHT + 50 };
+  const below = isCompact(width) ? NODE_BELOW.compact : NODE_BELOW.wide;
+  return {
+    side: bandInset(width) + NODE_SIDE,
+    top: INLET_TOP + CAPSULE_HEIGHT + BAND_GAP + NODE_ABOVE,
+    bottom: outletBottom(width) + CAPSULE_HEIGHT + BAND_GAP + below,
+  };
 }
 
 /** A point kept inside the stage's margins. */
@@ -92,8 +116,10 @@ export function layout(width: number, height: number, placement: Placement = {})
     width: capsuleWidth,
     height: CAPSULE_HEIGHT,
   };
-  const left = width * (compact ? 0.13 : 0.16);
-  const right = width * (compact ? 0.87 : 0.84);
+  // On wide screens each critic's label sits to its right, so the row starts a little left
+  // of centre and the last label still fits inside the band.
+  const left = width * (compact ? 0.13 : 0.09);
+  const right = width * (compact ? 0.87 : 0.78);
   const row = (inlet.y + CAPSULE_HEIGHT / 2 + outlet.y - CAPSULE_HEIGHT / 2) / 2;
   const critics = Object.fromEntries(
     CRITICS.map((critic, i) => [critic, { x: left + ((right - left) * i) / (CRITICS.length - 1), y: row }]),
@@ -131,13 +157,27 @@ export function port(l: Layout, critic: CriticName, end: "inlet" | "outlet"): Po
   };
 }
 
+/** The top and bottom of the critics' band. It wraps the critics wherever they have been
+ * dragged, never smaller than around their row, and stops short of the capsules. */
+export function bandBounds(l: Layout): { top: number; bottom: number } {
+  const ys = CRITICS.map((c) => l.critics[c].y);
+  const above = l.compact ? BAND_ABOVE.compact : BAND_ABOVE.wide;
+  const below = l.compact ? BAND_BELOW.compact : BAND_BELOW.wide;
+  const ceiling = l.inlet.y + l.inlet.height / 2 + BAND_GAP;
+  const floor = l.outlet.y - l.outlet.height / 2 - BAND_GAP;
+  return {
+    top: Math.max(ceiling, Math.min(l.row, ...ys) - above),
+    bottom: Math.min(floor, Math.max(l.row, ...ys) + below),
+  };
+}
+
 /** Room in px for a critic's label, which sits to the right of its node: up to the next
- * critic in the row, or to the stage's edge for the last one. */
+ * critic in the row, or to the band's right edge for the last one. */
 export function labelRoom(l: Layout, critic: CriticName): number {
   const { x, y } = l.critics[critic];
   const next = CRITICS.map((c) => l.critics[c])
     .filter((p) => p.x > x + 4 && Math.abs(p.y - y) < 90)
-    .reduce((nearest, p) => Math.min(nearest, p.x), l.width - 12);
+    .reduce((nearest, p) => Math.min(nearest, p.x), l.width - bandInset(l.width) - 14);
   return Math.max(60, next - x - 44);
 }
 

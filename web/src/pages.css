@@ -1038,22 +1038,69 @@ details[open] > summary .chevron {
 
 /* The four critics work in one band across the middle: a quiet lane, a hairline and the
    faintest lift, so they read as a group between the inlet and the outlet. */
+/* The critics' band: a raised field of its own, so the four critics read as one group
+   between the idea above and the verdict below. It wraps the critics wherever they are
+   dragged: while one is held it follows at once, and it eases when let go. */
 .panel-band {
   position: absolute;
-  left: clamp(12px, 3vw, 40px);
-  right: clamp(12px, 3vw, 40px);
-  border: 1px solid var(--hair);
+  border: 1px solid rgba(236, 232, 225, 0.2);
   border-radius: 20px;
-  background: rgba(236, 232, 225, 0.022);
+  background: linear-gradient(180deg, rgba(236, 232, 225, 0.06), rgba(236, 232, 225, 0.035));
+  box-shadow: inset 0 1px 0 rgba(236, 232, 225, 0.05);
   pointer-events: none;
+  transition:
+    top 260ms var(--ease-out),
+    height 260ms var(--ease-out);
+}
+
+.run-stage.is-dragging .panel-band {
+  transition: none;
 }
 
 .panel-band-label {
   position: absolute;
-  left: 18px;
-  top: 12px;
+  left: 20px;
+  top: 13px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.panel-band-title {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.panel-band-sub {
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+/* What a cloud counts, in the corner opposite the band's name. */
+.panel-band-key {
+  position: absolute;
+  right: 20px;
+  top: 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 13px;
-  color: var(--ink-3);
+  color: var(--ink-2);
+}
+
+.panel-band-speck {
+  width: 7px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ink-2);
+  transform: rotate(-35deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-band {
+    transition: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

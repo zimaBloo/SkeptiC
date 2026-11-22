@@ -25,7 +25,7 @@ export type Intensities = Partial<Record<StreamId, number>>;
 
 /** Nodes that gather a cloud when their step is done: each critic and the verdict. */
 export type CloudNode = CriticName | "combiner";
-/** How big each node's cloud is, from 0 (none) to 1 (the largest). */
+/** How many specks each node's cloud holds (0 for none). */
 export type Clouds = Partial<Record<CloudNode, number>>;
 
 const CLOUD_NODES: CloudNode[] = [...CRITICS, "combiner"];
@@ -100,8 +100,9 @@ const JOIN_SECONDS = 3.5;
 const TRAIL_POINTS = 20;
 const AGE = Float32Array.from({ length: TRAIL_POINTS }, (_, j) => Math.pow(1 - j / TRAIL_POINTS, 1.6));
 const LEVELS = 16;
-// A full cloud holds this many streaks; a smaller one fewer, by its size.
-const CLOUD_MAX = 170;
+// The most specks a cloud holds. A cloud spreads with the square root of its specks, so
+// a bigger one is as dense as a smaller one, only wider.
+const CLOUD_MAX = 300;
 // Radius of a cloud's inner edge and how far a full cloud reaches past it, in px.
 const CLOUD_INNER = 26;
 const CLOUD_REACH = 54;
@@ -126,7 +127,9 @@ export class FlowField {
   private last = 0;
   private running = false;
   private readonly cloud: CloudParticle[] = [];
+  /** How far each cloud spreads, 0 to 1, from its capacity. */
   private cloudSize = new Float32Array(CLOUD_NODES.length);
+  private cloudCapacity = new Int32Array(CLOUD_NODES.length);
   private cloudCount = new Int32Array(CLOUD_NODES.length);
   private readonly cloudColours: string[];
 
@@ -220,14 +223,14 @@ export class FlowField {
     return { x: base.x + n.x * across, y: base.y + n.y * across };
   }
 
-  /** Set each finished step's cloud size. Streaks that reach a finished node join its
-   * cloud until it is full; with `immediate` (a finished run opened later) the clouds
-   * are filled at once. A size of 0 empties that node's cloud. */
+  /** Set how many specks each finished step's cloud holds. Streaks that reach a finished
+   * node join its cloud until it is full; with `immediate` (a finished run opened later)
+   * the clouds are filled at once. 0 empties that node's cloud. */
   setClouds(clouds: Clouds, immediate = false): void {
     CLOUD_NODES.forEach((node, i) => {
-      const size = Math.min(1, Math.max(0, clouds[node] ?? 0));
-      this.cloudSize[i] = size;
-      const capacity = Math.round(size * CLOUD_MAX);
+      const capacity = Math.min(CLOUD_MAX, Math.max(0, Math.round(clouds[node] ?? 0)));
+      this.cloudCapacity[i] = capacity;
+      this.cloudSize[i] = Math.sqrt(capacity / CLOUD_MAX);
       if (capacity === 0 && (this.cloudCount[i] ?? 0) > 0) {
         for (let k = this.cloud.length - 1; k >= 0; k--) if (this.cloud[k]?.node === i) this.cloud.splice(k, 1);
         this.cloudCount[i] = 0;
@@ -341,14 +344,14 @@ export class FlowField {
         ctx.stroke();
       }
     });
-    // Clouds as still rings of dots, their size the same as in motion.
+    // Clouds as still rings of dots, one per speck, their size the same as in motion.
     CLOUD_NODES.forEach((_, node) => {
       const size = this.cloudSize[node] ?? 0;
       if (size === 0) return;
       const centre = this.nodePoint(node);
       ctx.fillStyle = this.cloudColours[node] ?? "#fff";
       ctx.globalAlpha = 0.5;
-      const dots = Math.round(size * 60);
+      const dots = this.cloudCapacity[node] ?? 0;
       for (let d = 0; d < dots; d++) {
         const angle = (d / dots) * Math.PI * 2;
         const radius = CLOUD_INNER + CLOUD_REACH * size * (0.4 + 0.6 * ((d * 7) % 10) / 10);
@@ -475,7 +478,7 @@ export class FlowField {
       if (p.t >= 1) {
         // A streak that reaches a finished step stays there, in its cloud.
         const node = this.endNode(p.stream);
-        if (stopping && node >= 0 && (this.cloudCount[node] ?? 0) < Math.round((this.cloudSize[node] ?? 0) * CLOUD_MAX)) {
+        if (stopping && node >= 0 && (this.cloudCount[node] ?? 0) < (this.cloudCapacity[node] ?? 0)) {
           this.addCloud(node, false);
         }
         p.drain = 1;
@@ -516,7 +519,7 @@ export class FlowField {
     // Streaks still on their way fill most of a cloud; a cloud whose stream had few
     // left tops itself up slowly from the node.
     CLOUD_NODES.forEach((_, node) => {
-      const capacity = Math.round((this.cloudSize[node] ?? 0) * CLOUD_MAX);
+      const capacity = this.cloudCapacity[node] ?? 0;
       if ((this.cloudCount[node] ?? 0) < capacity && Math.random() < dt * 25) this.addCloud(node, false);
     });
     for (const c of this.cloud) {
@@ -567,8 +570,8 @@ export class FlowField {
     }
 
     for (const list of this.cloudSegments) list.count = 0;
-    for (const c of this.cloud) if (c.size >= 2) this.collect(c, 0.55, 0, this.cloudSegments, c.node);
-    ctx.lineWidth = 0.9;
+    for (const c of this.cloud) if (c.size >= 2) this.collect(c, 0.85, 0, this.cloudSegments, c.node);
+    ctx.lineWidth = 1.15;
     for (let node = 0; node < CLOUD_NODES.length; node++) {
       ctx.strokeStyle = this.cloudColours[node] ?? "#fff";
       this.strokeLevels(this.cloudSegments, node);
