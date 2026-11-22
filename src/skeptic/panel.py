@@ -63,6 +63,16 @@ from skeptic.critics import (
     prompts_digest,
     submission_prompt,
 )
+from skeptic.progress import (
+    CombinerFinished,
+    CombinerStarted,
+    CriticFinished,
+    CriticStarted,
+    ProgressWriter,
+    RepairStarted,
+    RunFinished,
+    RunStarted,
+)
 from skeptic.verdict import (
     CriticVerdict,
     Overall,
@@ -172,20 +182,26 @@ class PanelResult(StoreModel):
 @task
 def skeptic_panel(
     idea: str,
+    idea_id: str | None = None,
     thinking: bool = False,
     temperature: float = 0.0,
     seed: int = 1,
     max_tokens: int = 3000,
+    progress_file: str | None = None,
 ) -> Task:
     """Run the critic panel on one idea.
 
     Args:
         idea: Path to a text or Markdown file with the idea.
+        idea_id: The idea's id in the log and the record. Defaults to the file's
+            name without its extension.
         thinking: Let models that can think do so before answering. Off by
             default, which is how the default models were tested.
         temperature: Sampling temperature for every call.
         seed: Sampling seed for every call.
         max_tokens: Most tokens any one reply may use.
+        progress_file: File to append progress events to, one JSON object per
+            line (see skeptic.progress).
 
     Set the generation settings with these task options (-T seed=2), not with
     Inspect's own --temperature or --seed, which the panel's calls override.
@@ -195,12 +211,12 @@ def skeptic_panel(
     return Task(
         dataset=[
             Sample(
-                id=path.stem,
+                id=idea_id or path.stem,
                 input=path.read_text(encoding="utf-8"),
                 metadata={"idea_file": path.as_posix()},
             )
         ],
-        solver=panel(**vars(settings)),
+        solver=panel(**vars(settings), progress_file=progress_file),
         scorer=panel_checks(),
         # The solver only uses the model roles below, never the main model.
         model="none",
@@ -215,21 +231,35 @@ def panel(
     temperature: float = 0.0,
     seed: int = 1,
     max_tokens: int = 3000,
+    progress_file: str | None = None,
 ) -> Solver:
     """Run the critics independently, then combine their verdicts."""
     settings = Settings(thinking, temperature, seed, max_tokens)
 
-    async def solve(state: TaskState, generate: Generate) -> TaskState:
+    async def review(state: TaskState, progress: ProgressWriter) -> TaskState:
         idea = state.input_text
         result = store_as(PanelResult)
         result.record_format = RECORD_FORMAT
+        models = {role: str(get_model(role=role, required=True)) for role in DEFAULT_MODELS}
+        progress.write(RunStarted(critics=list(CRITICS), models=models))
         result.ollama_version = await ollama_version()
 
         # One critic after another. With one local model loaded at a time the
         # server would run them in turn anyway, and a fixed order keeps runs
         # repeatable.
         for critic in CRITICS:
-            result.critics = [*result.critics, await run_critic(critic, idea, settings)]
+            progress.write(CriticStarted(critic=critic, model=models[critic]))
+            found = await run_critic(critic, idea, settings)
+            result.critics = [*result.critics, found]
+            progress.write(
+                CriticFinished(
+                    critic=critic,
+                    ok=found.verdict is not None,
+                    issues=len(found.verdict.issues) if found.verdict else None,
+                    overall=found.verdict.overall if found.verdict else None,
+                    error=found.error,
+                )
+            )
 
         verdicts: dict[CriticName, CriticVerdict | None] = {
             r.critic: r.verdict for r in result.critics
@@ -241,6 +271,7 @@ def panel(
 
         model = get_model(role="combiner", required=True)
         result.combiner_model = str(model)
+        progress.write(CombinerStarted(model=str(model)))
         messages = [
             ChatMessageSystem(content=combiner_system_prompt()),
             ChatMessageUser(content=reviews_prompt(idea, verdicts, capped)),
@@ -257,6 +288,7 @@ def panel(
             reply, extracted = parse_combined(output.completion)
         except VerdictParseError as error:
             result.combiner_error = with_stop_reason(str(error), output)
+            progress.write(CombinerFinished(ok=False, points=None, error=result.combiner_error))
             raise VerdictParseError(result.combiner_error) from error
         combined = resolve_combined(reply, verdicts, capped)
         result.combined = combined
@@ -267,6 +299,7 @@ def panel(
             # The statement calls a major problem fatal, usually because a critic's own
             # words still say 'fatal' after the panel lowered the issue. Ask once for a
             # rewrite; keep the first statement either way.
+            progress.write(RepairStarted())
             repair = await model.generate(
                 [
                     *messages,
@@ -293,7 +326,18 @@ def panel(
                 result.combined = combined
                 result.combined_checks = check_combined(combined, verdicts)
 
+        progress.write(CombinerFinished(ok=True, points=len(combined.points), error=None))
         state.output = ModelOutput.from_content(model=str(model), content=combined.statement)
+        return state
+
+    async def solve(state: TaskState, generate: Generate) -> TaskState:
+        progress = ProgressWriter(progress_file)
+        try:
+            state = await review(state, progress)
+        except Exception as error:
+            progress.write(RunFinished(ok=False, error=str(error) or repr(error)))
+            raise
+        progress.write(RunFinished(ok=True, error=None))
         return state
 
     return solve

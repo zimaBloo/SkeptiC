@@ -287,3 +287,9 @@ def test_cut_off_repair_is_not_used(tmp_path: Path) -> None:
     assert result.combined is not None
     assert result.combined.statement == "Competition is a fatal flaw."
     assert result.repair_error is not None and "cut off" in result.repair_error
+
+
+def test_idea_id_option_names_the_sample(tmp_path: Path) -> None:
+    log, _ = run_panel(tmp_path, task_args={"idea_id": "shelfsense"})
+
+    assert only_sample(log).id == "shelfsense"

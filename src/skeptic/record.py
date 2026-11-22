@@ -82,7 +82,8 @@ class PanelRecord(BaseModel):
     inspect_version: str | None = None
     ollama_version: str | None = None
     settings: dict[str, Any] = Field(
-        default_factory=dict, description="The task options the run used, apart from the idea."
+        default_factory=dict,
+        description="The task options the run used, apart from the idea and the progress file.",
     )
     critics: list[CriticRecord]
     combiner: CombinerRecord
@@ -147,7 +148,11 @@ def record_from_log(log: EvalLog | str | Path) -> PanelRecord:
         prompts_sha256=(log.eval.metadata or {}).get("prompts_sha256"),
         inspect_version=(log.eval.packages or {}).get("inspect_ai"),
         ollama_version=result.ollama_version,
-        settings={k: v for k, v in (log.eval.task_args or {}).items() if k != "idea"},
+        settings={
+            k: v
+            for k, v in (log.eval.task_args or {}).items()
+            if k not in ("idea", "idea_id", "progress_file")
+        },
         critics=critics,
         combiner=CombinerRecord(
             model=result.combiner_model,

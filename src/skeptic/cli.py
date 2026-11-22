@@ -1,6 +1,6 @@
 """The skeptic command.
 
-    skeptic run IDEA [--out FILE] [--role ROLE=MODEL ...]
+    skeptic run IDEA [--out FILE] [--progress FILE] [--idea-id ID] [--role ROLE=MODEL ...]
         Run the panel on an idea file and write the run's record as JSON.
     skeptic export LOG [--out FILE]
         Write the record of an earlier run from its Inspect log.
@@ -31,6 +31,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     run = commands.add_parser("run", help="run the panel on an idea file")
     run.add_argument("idea", type=Path, help="text or Markdown file with the idea")
     run.add_argument("--out", type=Path, help="where to write the record")
+    run.add_argument(
+        "--progress", metavar="FILE", help="file to append progress events to, as JSON lines"
+    )
+    run.add_argument(
+        "--idea-id", metavar="ID", help="the idea's id in the record (default: the file name)"
+    )
     run.add_argument(
         "--role",
         action="append",
@@ -63,7 +69,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(f"no such idea file: {args.idea}")
     roles = dict(_parse_role(parser, value) for value in args.role)
     [log] = inspect_eval(
-        skeptic_panel(idea=str(args.idea)),
+        skeptic_panel(idea=str(args.idea), idea_id=args.idea_id, progress_file=args.progress),
         model_roles=roles or None,
         log_dir=args.log_dir,
         display="plain",
