@@ -132,18 +132,24 @@ record.json
 
 ## First results
 
-A pilot on 22 Nov 2026 put the frontier panel against Claude Opus 5.5 working alone, on 16 test ideas with answer keys: some sound, some with planted flaws. Two models graded every answer, and "or" marks where they disagreed.
+A small test on 22 Nov 2026 compared the frontier panel with Claude Opus 5.5 reviewing alone: once with the panel's rules in a single prompt, and once just asked what is weak about the idea. The test ideas were made up, with answer keys written in advance. Two AI graders checked every review; where they disagreed, the table shows both counts.
 
-| | Panel | One model, same checklist | One model, plain question |
+| | Panel | Opus alone, with the panel's rules | Opus alone, asked plainly |
 |---|:-:|:-:|:-:|
-| Planted fatal flaw named | 3 of 3 | 3 of 3 | 3 of 3 |
-| ...and the idea called unworkable | 1 of 3 | 2 of 3 | 3 of 3 |
-| Planted weaknesses found (13, two runs each) | 18 or 22 of 26 | 23 of 26 | 25 of 26 |
-| Sound ideas called unworkable | 0 of 8 | 1 of 8 | 0 or 1 of 8 |
-| Cost per verdict | $0.13 | $0.06 | $0.06 |
-| Time per verdict | 79 s | 28 s | 36 s |
+| **3 ideas with one planted fatal flaw** | | | |
+| Found the flaw | 3 | 3 | 3 |
+| Said the idea can't work | 1 | 2 | 3 |
+| **13 planted weaknesses in 3 ideas, each reviewed twice (26 chances)** | | | |
+| Fully found | 18 or 22 | 23 | 25 |
+| **8 reviews of sound ideas** | | | |
+| Wrongly said the idea can't work | 0 | 1 | 0 or 1 |
+| **Quotes from the idea** | | | |
+| Word for word | 312 of 313 | 124 of 124 | not checked |
+| **Per review** | | | |
+| Cost | $0.13 | $0.06 | $0.06 |
+| Time | 79 s | 28 s | 36 s |
 
-The panel found no more than one strong model did, at about twice the cost. Its critics' quotes held up: 312 of 313 appear word for word in the idea. The samples are tiny, so none of these differences means much yet, and model diversity and the local lineup are still untested. The [pilot report](experiments/pilot-2026-11/report.md) has the setup and its limits.
+So the panel did no better than Opus alone, at twice the cost. It was also the least ready to call a fatally flawed idea unworkable, but in two of the three the critics who saw the flaw called it fixable, as the rules allow. The test is tiny, so none of these differences is conclusive, and model diversity and the local models are still untested. The [pilot report](experiments/pilot-2026-11/report.md) has the details.
 
 ## Development
 
