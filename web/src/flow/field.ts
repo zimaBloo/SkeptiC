@@ -2,6 +2,9 @@
 // trails, in the manner of the Wind Map and earth.nullschool. A stream's
 // intensity (0 to 1) sets how many streaks it carries and how fast they move.
 // The pointer pushes nearby streaks aside; they drift back to their path.
+// Each frame is drawn afresh from every streak's last few positions, rather than by
+// fading the previous frame: a faded canvas keeps a grey ghost of old trails, and a
+// moved node would leave its streams and cloud behind as skid marks.
 
 import { CRITICS, type CriticName } from "../api";
 import {
@@ -36,7 +39,15 @@ export interface Rect {
 }
 export type StreamColours = Record<StreamId, string>;
 
-interface Particle {
+/** A streak's recent positions: a ring of TRAIL_POINTS entries of x, y and glow (its
+ * brightness there, 0 to 1), newest at `head`, `size` of them filled. */
+interface Trail {
+  trail: Float32Array;
+  head: number;
+  size: number;
+}
+
+interface Particle extends Trail {
   stream: number; // index into STREAMS, or DORMANT while no stream has work
   t: number;
   speed: number; // px per second along the curve at full intensity
@@ -45,15 +56,16 @@ interface Particle {
   phase: number;
   dx: number; // displacement from the pointer
   dy: number;
-  x: number; // where the streak was drawn to last frame
-  y: number;
   nx: number; // where it is now
   ny: number;
   fresh: boolean;
+  /** Frames since the streak retired, 0 while it flows: a retired streak stops and its
+   * tail fades out before it starts again, rather than vanishing at once. */
+  drain: number;
 }
 
 /** A streak that has arrived at a finished step and now circles its node. */
-interface CloudParticle {
+interface CloudParticle extends Trail {
   node: number; // index into CLOUD_NODES
   angle: number;
   /** Where in the cloud it settles, 0 (inner edge) to 1 (outer edge). */
@@ -62,8 +74,6 @@ interface CloudParticle {
   reach: number;
   spin: number; // radians per second
   phase: number;
-  x: number;
-  y: number;
   nx: number;
   ny: number;
   fresh: boolean;
@@ -78,25 +88,22 @@ export interface FieldOptions {
 const POINTER_RADIUS = 110;
 const POINTER_PUSH = 900;
 const SPRING_BACK = 2.6; // per second
-const TRAIL_FADE = 0.085; // share of the trail removed per 60 Hz frame
 const INTENSITY_EASE = 1.6; // per second
 const IDLE_FLOOR = 0.035; // calm streams still drift
-const BANDS = 4; // brightness steps along a streak's life
 const DORMANT = -1; // a streak waiting for a stream with work
 // Waiting streaks join streams with work at a steady rate: the whole pool over about
 // one trip along a stream, so a starting stream fills evenly instead of in a slug.
 const JOIN_SECONDS = 3.5;
-// The trail fade multiplies alpha, and on an 8-bit canvas small values round back to
-// themselves (3/255 stays 3/255), leaving a grey ghost of every streak. Every
-// TRIM_EVERY frames the canvas is redrawn through a filter that subtracts TRIM_STEP
-// from alpha, which clears that residue and barely shortens a live trail.
-const TRIM_EVERY = 15;
-const TRIM_STEP = 4 / 255;
-const TRIM_FILTER_ID = "skeptic-trail-trim";
+// A tail is a streak's last TRAIL_POINTS positions, about a third of a second, dimming
+// towards its end; AGE is the brightness of each step back. Tails are drawn in LEVELS
+// steps of brightness, one stroke per stream and step.
+const TRAIL_POINTS = 20;
+const AGE = Float32Array.from({ length: TRAIL_POINTS }, (_, j) => Math.pow(1 - j / TRAIL_POINTS, 1.6));
+const LEVELS = 16;
 // A full cloud holds this many streaks; a smaller one fewer, by its size.
 const CLOUD_MAX = 170;
 // Radius of a cloud's inner edge and how far a full cloud reaches past it, in px.
-const CLOUD_INNER = 22;
+const CLOUD_INNER = 26;
 const CLOUD_REACH = 54;
 
 export class FlowField {
@@ -112,13 +119,12 @@ export class FlowField {
   private current = new Float32Array(STREAMS.length);
   private pointer: { x: number; y: number } | null = null;
   private quiet: Rect[] = [];
-  private readonly buckets: Particle[][] = Array.from({ length: STREAMS.length * BANDS }, () => []);
+  private readonly segments: Segments[] = Array.from({ length: STREAMS.length * LEVELS }, newSegments);
+  private readonly cloudSegments: Segments[] = Array.from({ length: CLOUD_NODES.length * LEVELS }, newSegments);
   private frame = 0;
-  private frames = 0;
   private joinBudget = 0;
   private last = 0;
   private running = false;
-  private readonly canTrim: boolean;
   private readonly cloud: CloudParticle[] = [];
   private cloudSize = new Float32Array(CLOUD_NODES.length);
   private cloudCount = new Int32Array(CLOUD_NODES.length);
@@ -131,7 +137,6 @@ export class FlowField {
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("canvas 2d context unavailable");
     this.ctx = ctx;
-    this.canTrim = typeof ctx.filter === "string" && ensureTrimFilter();
     this.colours = STREAMS.map((id) => options.colours[id]);
     // A critic's cloud takes the colour of the stream that fed it; the verdict's, the
     // colour every outgoing stream ends in.
@@ -181,15 +186,38 @@ export class FlowField {
       const moved = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y) > 24;
       if (moved(old.p0, c.p0) || moved(old.p3, c.p3)) jumped.add(i);
     });
-    if (jumped.size) for (const p of this.particles) if (jumped.has(p.stream)) p.fresh = true;
-    // A cloud whose node jumps starts again where the node now is, rather than drawing
-    // a streak from the old place.
-    const movedNodes = new Set<number>();
-    beforeNodes.forEach((old, node) => {
+    // Streaks on a stream that only shifted carry their tails along with it, so a
+    // dragged node leaves no smear behind.
+    for (const p of this.particles) {
+      if (p.stream === DORMANT || p.size === 0) continue;
+      if (jumped.has(p.stream)) {
+        p.fresh = true;
+        continue;
+      }
+      const old = before[p.stream];
+      const now = this.curves[p.stream];
+      if (!old || !now || old === now) continue;
+      const from = this.streamPoint(p, old);
+      const to = this.streamPoint(p, now);
+      if (from.x !== to.x || from.y !== to.y) shiftTrail(p, to.x - from.x, to.y - from.y);
+    }
+    // A cloud moves with its node, tails and all.
+    const shifts = beforeNodes.map((old, node) => {
       const now = this.nodePoint(node);
-      if (Math.hypot(now.x - old.x, now.y - old.y) > 24) movedNodes.add(node);
+      return { x: now.x - old.x, y: now.y - old.y };
     });
-    if (movedNodes.size) for (const c of this.cloud) if (movedNodes.has(c.node)) c.fresh = true;
+    for (const c of this.cloud) {
+      const d = shifts[c.node];
+      if (d && (d.x !== 0 || d.y !== 0)) shiftTrail(c, d.x, d.y);
+    }
+  }
+
+  /** Where a streak sits on a stream's curve, before the pointer's push. */
+  private streamPoint(p: Particle, c: Curve): { x: number; y: number } {
+    const base = pointAt(c, p.t);
+    const n = normalAt(c, p.t);
+    const across = (p.offset + p.wobble * Math.sin(p.phase + p.t * 9)) * bundleWidth(p.t) * this.layout.spread;
+    return { x: base.x + n.x * across, y: base.y + n.y * across };
   }
 
   /** Set each finished step's cloud size. Streaks that reach a finished node join its
@@ -218,11 +246,10 @@ export class FlowField {
       reach: settled ? 1 : 0,
       spin: (0.18 + Math.random() * 0.32) * (node % 2 === 0 ? 1 : -1),
       phase: Math.random() * Math.PI * 2,
-      x: 0,
-      y: 0,
       nx: 0,
       ny: 0,
       fresh: true,
+      ...newTrail(),
     });
     this.cloudCount[node] = (this.cloudCount[node] ?? 0) + 1;
   }
@@ -265,7 +292,7 @@ export class FlowField {
       if (dt >= 1 / 64) {
         this.last = now;
         this.step(dt);
-        this.draw(dt);
+        this.draw();
       }
       this.frame = requestAnimationFrame(tick);
     };
@@ -345,11 +372,11 @@ export class FlowField {
       phase: Math.random() * Math.PI * 2,
       dx: 0,
       dy: 0,
-      x: 0,
-      y: 0,
       nx: 0,
       ny: 0,
       fresh: true,
+      drain: 0,
+      ...newTrail(),
     };
     // A streak leaving a finished critic for the verdict starts in that critic's cloud,
     // where the work gathered, and eases onto its stream as it goes (the same spring
@@ -417,6 +444,12 @@ export class FlowField {
     this.joinBudget = hasWork ? Math.min(this.joinBudget + joinRate * dt, joinRate * 0.1) : 0;
     for (let k = 0; k < this.particles.length; k++) {
       let p = this.particles[k] as Particle;
+      if (p.drain > 0) {
+        // A retired streak waits for its tail to fade, then starts again.
+        if (++p.drain < TRAIL_POINTS) continue;
+        p = this.spawn(false);
+        this.particles[k] = p;
+      }
       if (p.stream === DORMANT) {
         // Waiting streaks join a stream with work from its source, at a steady rate.
         if (this.joinBudget < 1) continue;
@@ -434,9 +467,8 @@ export class FlowField {
       // fills fast. On a stream whose step has ended, streaks already under way
       // finish their path at full speed instead of vanishing mid-air.
       if (!stopping && Math.random() < (1 - intensity) * dt * 0.9) {
-        p = this.spawn(false);
-        this.particles[k] = p;
-        if (p.stream === DORMANT) continue;
+        p.drain = 1;
+        continue;
       }
       const length = this.lengths[p.stream] ?? 1;
       p.t += (p.speed * dt * (stopping ? 1 : 0.25 + 0.75 * intensity)) / length;
@@ -446,18 +478,12 @@ export class FlowField {
         if (stopping && node >= 0 && (this.cloudCount[node] ?? 0) < Math.round((this.cloudSize[node] ?? 0) * CLOUD_MAX)) {
           this.addCloud(node, false);
         }
-        p = this.spawn(false);
-        this.particles[k] = p;
-        if (p.stream === DORMANT) continue;
+        p.drain = 1;
+        continue;
       }
       const c = this.curves[p.stream];
       if (!c) continue;
-      const base = pointAt(c, p.t);
-      const n = normalAt(c, p.t);
-      const across =
-        (p.offset + p.wobble * Math.sin(p.phase + p.t * 9)) * bundleWidth(p.t) * this.layout.spread;
-      const bx = base.x + n.x * across;
-      const by = base.y + n.y * across;
+      const { x: bx, y: by } = this.streamPoint(p, c);
       p.dx *= spring;
       p.dy *= spring;
       if (pointer) {
@@ -473,10 +499,12 @@ export class FlowField {
       const x = bx + p.dx;
       const y = by + p.dy;
       if (p.fresh) {
-        p.x = x;
-        p.y = y;
+        p.size = 0;
         p.fresh = false;
       }
+      // Fainter near the nodes, where a streak leaves and arrives.
+      const edge = Math.min(1, p.t / 0.07, (1 - p.t) / 0.07);
+      record(p, x, y, Math.max(0.25, edge));
       p.nx = x;
       p.ny = y;
     }
@@ -504,132 +532,134 @@ export class FlowField {
       const x = centre.x + Math.cos(c.angle) * radius;
       const y = centre.y + Math.sin(c.angle) * radius * 0.86;
       if (c.fresh) {
-        c.x = x;
-        c.y = y;
+        c.size = 0;
         c.fresh = false;
       }
+      record(c, x, y, 1);
       c.nx = x;
       c.ny = y;
     }
   }
 
-  private drawClouds(): void {
-    const { ctx } = this;
-    ctx.lineWidth = 0.9;
-    CLOUD_NODES.forEach((_, node) => {
-      ctx.beginPath();
-      let any = false;
-      for (const c of this.cloud) {
-        if (c.node !== node) continue;
-        if (!this.inQuietZone(c.nx, c.ny)) {
-          ctx.moveTo(c.x, c.y);
-          ctx.lineTo(c.nx, c.ny);
-          any = true;
-        }
-        c.x = c.nx;
-        c.y = c.ny;
-      }
-      if (!any) return;
-      ctx.strokeStyle = this.cloudColours[node] ?? "#fff";
-      ctx.globalAlpha = 0.55;
-      ctx.stroke();
-    });
-    ctx.globalAlpha = 1;
-  }
-
-  private draw(dt: number): void {
+  private draw(): void {
     const { ctx, dpr } = this;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    // Fade the previous frame towards transparent instead of clearing it.
-    ctx.globalCompositeOperation = "destination-out";
-    ctx.fillStyle = `rgba(0,0,0,${1 - Math.pow(1 - TRAIL_FADE, dt * 60)})`;
-    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
-    // (Drawing a canvas of zero width or height throws, so a collapsed one is skipped.)
-    if (this.canTrim && ++this.frames % TRIM_EVERY === 0 && this.canvas.width > 0 && this.canvas.height > 0) {
-      // Redraw the canvas onto itself through the alpha-subtracting filter.
-      ctx.globalCompositeOperation = "copy";
-      ctx.filter = `url(#${TRIM_FILTER_ID})`;
-      ctx.drawImage(this.canvas, 0, 0);
-      ctx.filter = "none";
-    }
-    ctx.globalCompositeOperation = "source-over";
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.lineCap = "round";
 
-    // Sort the streaks into one bucket per stream and brightness band (fainter near
-    // the nodes), so each bucket is a single stroke.
-    const buckets = this.buckets;
-    for (const bucket of buckets) bucket.length = 0;
+    // Sort every tail segment into one list per stream and brightness step, so each
+    // list is a single stroke.
+    for (const list of this.segments) list.count = 0;
     for (const p of this.particles) {
-      if (p.stream === DORMANT) continue;
-      const edge = Math.min(1, p.t / 0.07, (1 - p.t) / 0.07);
-      const band = Math.min(BANDS, Math.max(1, Math.ceil(edge * BANDS)));
-      buckets[p.stream * BANDS + band - 1]?.push(p);
+      if (p.stream === DORMANT || p.size < 2) continue;
+      const visible = 0.16 + 0.64 * (this.current[p.stream] ?? 0);
+      this.collect(p, visible, p.drain, this.segments, p.stream);
     }
     for (let s = 0; s < STREAMS.length; s++) {
       const intensity = this.current[s] ?? 0;
-      const visible = 0.16 + 0.64 * intensity;
       ctx.strokeStyle = this.colours[s] ?? "#fff";
       // Faint streams stay hairlines; the working stream gets a line heavy enough
       // to survive a projector or a compressed screen recording, and no heavier:
       // past this the streaks merge into a painted ribbon.
       ctx.lineWidth = 0.75 + 0.55 * intensity * intensity;
-      for (let band = 1; band <= BANDS; band++) {
-        const bucket = buckets[s * BANDS + band - 1];
-        if (!bucket?.length) continue;
-        ctx.beginPath();
-        let any = false;
-        for (const p of bucket) {
-          if (!this.inQuietZone(p.nx, p.ny)) {
-            ctx.moveTo(p.x, p.y);
-            ctx.lineTo(p.nx, p.ny);
-            any = true;
-          }
-          p.x = p.nx;
-          p.y = p.ny;
-        }
-        if (!any) continue;
-        ctx.globalAlpha = visible * (band / BANDS);
-        ctx.stroke();
-      }
+      this.strokeLevels(this.segments, s);
+    }
+
+    for (const list of this.cloudSegments) list.count = 0;
+    for (const c of this.cloud) if (c.size >= 2) this.collect(c, 0.55, 0, this.cloudSegments, c.node);
+    ctx.lineWidth = 0.9;
+    for (let node = 0; node < CLOUD_NODES.length; node++) {
+      ctx.strokeStyle = this.cloudColours[node] ?? "#fff";
+      this.strokeLevels(this.cloudSegments, node);
     }
     ctx.globalAlpha = 1;
-    this.drawClouds();
   }
+
+  /** Add a tail's segments, newest first, to the lists for `group` (a stream or a
+   * node) by brightness. `age` shifts the whole tail older, as a retired streak fades. */
+  private collect(t: Trail, visible: number, age: number, lists: Segments[], group: number): void {
+    const { trail } = t;
+    for (let j = 0; j < t.size - 1 && j + age < TRAIL_POINTS; j++) {
+      const a = ((t.head - j + TRAIL_POINTS) % TRAIL_POINTS) * 3;
+      const b = ((t.head - j - 1 + TRAIL_POINTS) % TRAIL_POINTS) * 3;
+      const x = trail[a] ?? 0;
+      const y = trail[a + 1] ?? 0;
+      const level = Math.min(LEVELS, Math.round(visible * (trail[a + 2] ?? 0) * (AGE[j + age] ?? 0) * LEVELS));
+      if (level <= 0 || this.inQuietZone(x, y)) continue;
+      const list = lists[group * LEVELS + level - 1];
+      if (list) pushSegment(list, trail[b] ?? 0, trail[b + 1] ?? 0, x, y);
+    }
+  }
+
+  /** Stroke `group`'s lists, one per brightness step, in the current colour and width. */
+  private strokeLevels(lists: Segments[], group: number): void {
+    const { ctx } = this;
+    for (let level = 1; level <= LEVELS; level++) {
+      const list = lists[group * LEVELS + level - 1];
+      if (!list?.count) continue;
+      const { data, count } = list;
+      ctx.beginPath();
+      for (let i = 0; i < count * 4; i += 4) {
+        ctx.moveTo(data[i] ?? 0, data[i + 1] ?? 0);
+        ctx.lineTo(data[i + 2] ?? 0, data[i + 3] ?? 0);
+      }
+      ctx.globalAlpha = level / LEVELS;
+      ctx.stroke();
+    }
+  }
+}
+
+/** Line segments waiting to be stroked: x0, y0, x1, y1 each, `count` of them. */
+interface Segments {
+  data: Float32Array;
+  count: number;
+}
+
+function newSegments(): Segments {
+  return { data: new Float32Array(1024), count: 0 };
+}
+
+function pushSegment(list: Segments, x0: number, y0: number, x1: number, y1: number): void {
+  if ((list.count + 1) * 4 > list.data.length) {
+    const grown = new Float32Array(list.data.length * 2);
+    grown.set(list.data);
+    list.data = grown;
+  }
+  const i = list.count * 4;
+  list.data[i] = x0;
+  list.data[i + 1] = y0;
+  list.data[i + 2] = x1;
+  list.data[i + 3] = y1;
+  list.count++;
+}
+
+function newTrail(): Trail {
+  return { trail: new Float32Array(TRAIL_POINTS * 3), head: 0, size: 0 };
+}
+
+function record(t: Trail, x: number, y: number, glow: number): void {
+  t.head = (t.head + 1) % TRAIL_POINTS;
+  const i = t.head * 3;
+  t.trail[i] = x;
+  t.trail[i + 1] = y;
+  t.trail[i + 2] = glow;
+  t.size = Math.min(t.size + 1, TRAIL_POINTS);
+}
+
+/** Move a whole tail, as when its node is dragged. */
+function shiftTrail(t: Trail & { nx: number; ny: number }, dx: number, dy: number): void {
+  for (let j = 0; j < t.size; j++) {
+    const i = ((t.head - j + TRAIL_POINTS) % TRAIL_POINTS) * 3;
+    t.trail[i] = (t.trail[i] ?? 0) + dx;
+    t.trail[i + 1] = (t.trail[i + 1] ?? 0) + dy;
+  }
+  t.nx += dx;
+  t.ny += dy;
 }
 
 function easeOut(t: number): number {
   return 1 - Math.pow(1 - t, 3);
-}
-
-/** Put the trail-trim filter in the document once: alpha minus TRIM_STEP, colour
- * untouched. Returns false where the document cannot hold it. */
-function ensureTrimFilter(): boolean {
-  if (typeof document === "undefined") return false;
-  if (document.getElementById(TRIM_FILTER_ID)) return true;
-  const ns = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(ns, "svg");
-  svg.setAttribute("aria-hidden", "true");
-  svg.setAttribute("width", "0");
-  svg.setAttribute("height", "0");
-  svg.style.position = "absolute";
-  const filter = document.createElementNS(ns, "filter");
-  filter.id = TRIM_FILTER_ID;
-  filter.setAttribute("color-interpolation-filters", "sRGB");
-  filter.setAttribute("x", "0");
-  filter.setAttribute("y", "0");
-  filter.setAttribute("width", "1");
-  filter.setAttribute("height", "1");
-  const transfer = document.createElementNS(ns, "feComponentTransfer");
-  const alpha = document.createElementNS(ns, "feFuncA");
-  alpha.setAttribute("type", "linear");
-  alpha.setAttribute("slope", "1");
-  alpha.setAttribute("intercept", String(-TRIM_STEP));
-  transfer.append(alpha);
-  filter.append(transfer);
-  svg.append(filter);
-  document.body.append(svg);
-  return true;
 }
 
 function gaussian(): number {
