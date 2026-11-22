@@ -95,17 +95,25 @@ code {
 
 /* ---------- Start ---------- */
 
+/* ---------- One page: start, the panel, the verdict, the issues ---------- */
+
 .start {
   display: grid;
-  grid-template-columns: minmax(0, 600px) minmax(0, 1fr);
-  min-height: calc(100dvh - 60px);
+  grid-template-columns: minmax(0, 620px) minmax(0, 440px);
+  justify-content: space-between;
+  align-items: start;
+  gap: 56px clamp(40px, 6vw, 120px);
+  padding: clamp(40px, 8vh, 96px) clamp(20px, 4vw, 56px) clamp(56px, 10vh, 96px);
 }
 
 .start-intro {
-  padding: clamp(40px, 8vh, 96px) clamp(20px, 4vw, 56px) 64px;
   display: flex;
   flex-direction: column;
   gap: 28px;
+}
+
+.start .past-runs {
+  padding-top: 10px;
 }
 
 .start-intro h1 {
@@ -318,23 +326,6 @@ code {
   color: var(--fatal);
 }
 
-.start-diagram {
-  position: sticky;
-  top: 0;
-  height: 100dvh;
-  margin-top: -60px;
-  overflow: hidden;
-}
-
-.start-diagram canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-
-/* ---------- Nodes (run page and start diagram) ---------- */
-
 .node-labels {
   position: absolute;
   inset: 0;
@@ -356,14 +347,25 @@ code {
   --critic: var(--ink);
 }
 
+/* Nodes are big enough to read across a room and to click: critics 30 px, the idea and
+   the verdict, where every stream starts and ends, 38 px. */
+.node {
+  --ring: 30px;
+}
+
+.node--idea,
+.node--combiner {
+  --ring: 38px;
+}
+
 .node-ring {
   position: absolute;
   left: 0;
   top: 0;
-  width: 13px;
-  height: 13px;
+  width: var(--ring);
+  height: var(--ring);
   border-radius: 50%;
-  border: 1.5px solid var(--hair-strong);
+  border: 2px solid var(--hair-strong);
   background: var(--ground);
   transform: translate(-50%, -50%);
   transition:
@@ -379,7 +381,7 @@ code {
 .node-ring[data-state="working"]::after {
   content: "";
   position: absolute;
-  inset: -6px;
+  inset: -10px;
   border-radius: 50%;
   border: 1px solid var(--critic);
   opacity: 0;
@@ -436,12 +438,25 @@ code {
 
 @media (hover: hover) and (pointer: fine) {
   .run-stage .node-labels.is-draggable .node:hover .node-ring {
-    transform: translate(-50%, -50%) scale(1.25);
+    transform: translate(-50%, -50%) scale(1.08);
   }
 }
 
 .run-stage .node.is-dragging .node-ring {
-  transform: translate(-50%, -50%) scale(1.35);
+  transform: translate(-50%, -50%) scale(1.14);
+}
+
+/* A node is a button: it opens its card. Keyboard focus and the open card show as a
+   hairline ring around the node, drawn as a stroke, not a glow. */
+.node {
+  outline: none;
+}
+
+.node:focus-visible .node-ring,
+.node.is-open .node-ring {
+  box-shadow:
+    0 0 0 4px var(--ground),
+    0 0 0 5.5px var(--critic);
 }
 
 @keyframes node-pop {
@@ -476,45 +491,16 @@ code {
   white-space: nowrap;
 }
 
+/* Streams arrive from above and leave below, so a label sits beside its node, to the
+   right, where no stream runs. */
 .node-text--right {
-  left: 20px;
+  left: calc(var(--ring) / 2 + 14px);
   top: 0;
   transform: translateY(-50%);
-}
-
-/* A critic's label sits up and to the right of its node, or down and to the right,
-   on the side its outgoing stream bends away from: the line stays unlettered. */
-.node-text--right.is-above {
-  left: 14px;
-  top: auto;
-  bottom: 5px;
-  transform: none;
-}
-
-.node-text--right.is-below {
-  left: 14px;
-  top: 5px;
-  transform: none;
-}
-
-/* A node dragged near the right edge keeps its label on screen, to its left. */
-.node-text--right.is-left {
-  left: auto;
-  right: 20px;
-  align-items: flex-end;
-  text-align: right;
-}
-
-.node-text--right.is-left.is-above,
-.node-text--right.is-left.is-below {
-  right: 14px;
-}
-
-.node-text--right {
   max-width: var(--room, none);
 }
 
-.node-text--right > * {
+.node .node-text--right > * {
   text-wrap: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -528,8 +514,13 @@ code {
   text-align: center;
 }
 
+/* The idea's title on a phone: under its node, on as many lines as it needs. */
+.node--idea .node-text--below {
+  max-width: min(300px, 84vw);
+}
+
 .node-text--below {
-  top: 20px;
+  top: calc(var(--ring) / 2 + 10px);
   left: 0;
   transform: translateX(-50%);
   align-items: center;
@@ -539,36 +530,16 @@ code {
   max-width: 230px;
 }
 
-/* On the run page the idea's title is placed in code (RunPage ideaLabelBox): centred
-   under its node, or against the screen's edge when the node is near it. */
-.node-text--placed {
-  transform: none;
-  max-width: none;
-}
-
-/* On a phone the verdict's node sits near the right edge, so its label (above it)
-   ends just past the node instead of centring and running off the screen. */
-.node--combiner .node-text--above {
-  left: auto;
-  right: -15px;
-  transform: none;
-  align-items: flex-end;
-  text-align: right;
-}
-
-/* A phone's verdict node dragged near the left edge: its label grows to the right. */
-.node--combiner .node-text--above.is-start {
-  left: -15px;
-  right: auto;
-  align-items: flex-start;
-  text-align: left;
-}
-
 .node-title {
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 500;
   line-height: 1.25;
   text-wrap: balance;
+}
+
+.node--idea .node-title {
+  font-size: 20px;
+  letter-spacing: -0.01em;
 }
 
 .node-meta {
@@ -585,16 +556,129 @@ code {
 }
 
 .is-resting .node-title {
-  font-size: 15px;
+  font-size: 16px;
   color: var(--ink-2);
+}
+
+/* ---------- A node's card ---------- */
+
+/* The one framed surface in the build: a node's facts need a quiet ground of their own
+   over the moving field. Flat: the page's ground, a strong hairline, no shadow. */
+.node-card {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px 18px;
+  background: var(--ground);
+  border: 1px solid var(--hair-strong);
+  border-radius: 10px;
+  animation: card-in 220ms var(--ease-out) both;
+}
+
+.node-card:not([data-critic]) {
+  --critic: var(--ink);
+}
+
+.node-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.node-card-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+.node-card-title .critic-dot {
+  color: var(--critic);
+}
+
+.node-card-close {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: var(--ink-3);
+  padding: 6px;
+  margin: -6px -6px -6px 0;
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 0;
+  transition: color 160ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .node-card-close:hover {
+    color: var(--ink);
+  }
+}
+
+.node-card-angle {
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.node-card-facts {
+  margin: 0;
+  border-top: 1px solid var(--hair);
+}
+
+.node-card-facts > div {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--hair);
+}
+
+.node-card-facts dt {
+  font-size: 14px;
+  color: var(--ink-3);
+}
+
+.node-card-facts dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.node-card-top {
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.node-card-top span {
+  display: block;
+  font-size: 14px;
+  color: var(--ink-3);
+  margin-bottom: 2px;
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
 }
 
 /* ---------- Run ---------- */
 
-.run-page {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
+/* The panel's stage: one screen tall, the field behind the nodes. */
+.stage-section {
+  position: relative;
+  height: max(680px, 100svh);
+  border-top: 1px solid var(--hair);
 }
 
 .run-field {
@@ -636,6 +720,10 @@ code {
   font-size: 13px;
 }
 
+.status-line .status-totals {
+  color: var(--ink-2);
+}
+
 .stop-control {
   display: inline-flex;
   flex-wrap: wrap;
@@ -643,19 +731,27 @@ code {
   gap: 6px 14px;
 }
 
-/* On wide screens the result's two parts place themselves; on narrow ones they
-   share one scrolling column (see the narrow-screen rules). */
+/* The result below the stage: the run's summary beside the verdict. */
+.result-section {
+  padding: clamp(64px, 12vh, 120px) clamp(20px, 4vw, 56px) clamp(56px, 10vh, 96px);
+  border-top: 1px solid var(--hair);
+}
+
 .run-result {
-  display: contents;
+  display: grid;
+  grid-template-columns: min(25vw, 330px) minmax(0, 880px);
+  gap: clamp(40px, 6vw, 96px);
+  align-items: start;
+}
+
+/* The statement inks in when the section comes into view, not before. */
+.result-section:not(.is-in) * {
+  animation-play-state: paused;
 }
 
 .panel-summary {
-  position: absolute;
-  left: clamp(20px, 4vw, 56px);
-  top: 112px;
-  width: min(25vw, 330px);
-  max-height: calc(100dvh - 112px - 24px);
-  overflow-y: auto;
+  position: sticky;
+  top: 32px;
   display: flex;
   flex-direction: column;
   gap: 22px;
@@ -698,7 +794,25 @@ code {
 
 .panel-meta {
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: 14px;
+}
+
+.panel-figures {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 20px;
+}
+
+.panel-figures dt {
+  font-size: 14px;
+  color: var(--ink-3);
+}
+
+.panel-figures dd {
+  margin: 2px 0 0;
+  font-size: 15px;
+  color: var(--ink);
 }
 
 .panel-actions {
@@ -710,13 +824,6 @@ code {
 }
 
 .verdict {
-  position: absolute;
-  left: max(36vw, calc(clamp(20px, 4vw, 56px) + 330px + 72px));
-  right: clamp(20px, 5vw, 80px);
-  top: 104px;
-  bottom: 24px;
-  overflow-y: auto;
-  padding-bottom: 40px;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -895,6 +1002,9 @@ code {
   .node-ring[data-state="working"]::after {
     animation: none;
   }
+  .node-card {
+    animation-name: fade;
+  }
   .run-stage .node--critic .node-ring,
   .run-stage .node--combiner .node-ring,
   .run-stage .node--critic .node-text,
@@ -911,7 +1021,8 @@ code {
 /* ---------- Details ---------- */
 
 .details {
-  padding: 36px clamp(20px, 4vw, 56px) 80px;
+  padding: clamp(64px, 12vh, 120px) clamp(20px, 4vw, 56px) 96px;
+  border-top: 1px solid var(--hair);
 }
 
 .details-head {
@@ -922,7 +1033,7 @@ code {
   margin-bottom: 40px;
 }
 
-.details-head h1 {
+.details-head h2 {
   font-size: clamp(28px, 2.6vw, 38px);
   line-height: 1.12;
   letter-spacing: -0.02em;
@@ -1146,31 +1257,18 @@ code {
   .start {
     grid-template-columns: minmax(0, 1fr);
   }
-  .start-diagram {
-    position: relative;
-    height: 380px;
-    margin-top: 0;
-    order: -1;
+  .stage-section {
+    height: max(600px, 92svh);
   }
-  /* The finished run as one scrolling column: what was reviewed, the ratings and
-     links, then the statement. */
+  /* The result as one column: what was reviewed, the ratings and figures, then the
+     statement. */
   .run-result {
     display: flex;
     flex-direction: column;
     gap: 36px;
-    position: absolute;
-    inset: 84px 0 0;
-    overflow-y: auto;
-    padding: 0 clamp(20px, 4vw, 56px) 48px;
   }
-  .run-result .panel-summary,
-  .run-result .verdict {
+  .run-result .panel-summary {
     position: static;
-    width: auto;
-    max-width: 880px;
-    max-height: none;
-    overflow: visible;
-    padding-bottom: 0;
   }
   .run-result .panel-summary {
     gap: 16px;

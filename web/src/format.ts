@@ -7,6 +7,14 @@ export const CRITIC_TITLES: Record<CriticName, string> = {
   risk: "Risk and regulation",
 };
 
+/** What each critic looks at, in a line (from its prompt in src/skeptic/prompts/roles). */
+export const CRITIC_ANGLES: Record<CriticName, string> = {
+  market: "Demand, competitors, market size and pricing, and whether the price covers the cost.",
+  technical: "Whether it can be built and work as described, and what it costs to build and run.",
+  customer: "Who has the problem, how painful it is, and whether they would pay and keep using it.",
+  risk: "Legal, privacy, safety and ethical risks, and dependencies that could stop the idea.",
+};
+
 export const CRITIC_SHORT: Record<CriticName, string> = {
   market: "market",
   technical: "technical",
@@ -69,4 +77,33 @@ export function formatWhen(iso: string | null): string {
 export function durationBetween(start: string | null, end: string | null): number | null {
   if (!start || !end) return null;
   return (Date.parse(end) - Date.parse(start)) / 1000;
+}
+
+const LABS: Record<string, string> = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  google: "Google",
+  "x-ai": "xAI",
+  mistralai: "Mistral",
+  deepseek: "DeepSeek",
+};
+
+/** Who runs a model: the lab behind a hosted model, or this computer for a local one. */
+export function modelHost(model: string | null | undefined): string {
+  if (!model) return "";
+  if (model.startsWith("ollama/")) return "on this computer";
+  const lab = model.replace(/^openrouter\//, "").split("/")[0] ?? "";
+  return LABS[lab] ?? lab;
+}
+
+/** 12345 -> "12,345". */
+export function formatTokens(tokens: number | null | undefined): string {
+  return tokens === null || tokens === undefined ? "" : Math.round(tokens).toLocaleString("en-US");
+}
+
+/** 0.0254 -> "$0.025"; under a tenth of a cent -> "<$0.001". */
+export function formatCost(cost: number | null | undefined): string {
+  if (cost === null || cost === undefined) return "";
+  if (cost > 0 && cost < 0.001) return "<$0.001";
+  return "$" + cost.toFixed(cost < 1 ? 3 : 2);
 }

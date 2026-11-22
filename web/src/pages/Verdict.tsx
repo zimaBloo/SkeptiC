@@ -36,7 +36,7 @@ export function Verdict({ record, runId }: { record: PanelRecord; runId: string 
           const delay = i < POINTS_SHOWN ? 1150 + i * 70 : (i - POINTS_SHOWN) * 40;
           return (
             <li key={i} className="point" style={{ animationDelay: `${delay}ms` }}>
-              <Link className="point-link" to={`/runs/${runId}/details${lead ? `#${lead.id}` : ""}`}>
+              <Link className="point-link" to={`/runs/${runId}#${lead ? lead.id : "issues"}`}>
                 <span className="point-critics" aria-hidden="true">
                   {point.critics.map((critic) => (
                     <span key={critic} className="critic-dot" data-critic={critic} />

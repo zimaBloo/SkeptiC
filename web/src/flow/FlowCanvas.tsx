@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { CRITICS } from "../api";
-import { FlowField, type Intensities, type StreamColours } from "./field";
+import { FlowField, type Clouds, type Intensities, type StreamColours } from "./field";
 import type { Placement, StreamId } from "./geometry";
 
 interface Props {
@@ -13,9 +13,15 @@ interface Props {
   placement?: Placement;
   /** While true the pointer does not push streaks aside (a node is being dragged). */
   holdPointer?: boolean;
+  /** Finished steps' clouds, sized 0 to 1. */
+  clouds?: Clouds;
+  /** The run is over (not live, not replaying): clouds appear full at once instead of
+   * gathering from the streaks that arrive. */
+  settled?: boolean;
 }
 
 const NO_PLACEMENT: Placement = {};
+const NO_CLOUDS: Clouds = {};
 
 /** The flow field on a canvas that fills its parent. */
 export function FlowCanvas({
@@ -25,6 +31,8 @@ export function FlowCanvas({
   count,
   placement = NO_PLACEMENT,
   holdPointer = false,
+  clouds = NO_CLOUDS,
+  settled = false,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fieldRef = useRef<FlowField | null>(null);
@@ -34,6 +42,8 @@ export function FlowCanvas({
   placementRef.current = placement;
   const holdRef = useRef(holdPointer);
   holdRef.current = holdPointer;
+  const cloudsRef = useRef(clouds);
+  cloudsRef.current = clouds;
   const measureRef = useRef<(() => void) | null>(null);
   // The first intensities with any flow are applied at once, spread along the streams,
   // so a page opened in the middle of a run shows it already flowing.
@@ -47,6 +57,8 @@ export function FlowCanvas({
     field.setPlacement(placementRef.current);
     field.setIntensities(intensitiesRef.current, true);
     primed.current = hasFlow(intensitiesRef.current);
+    // Steps that had already finished when the page opened show their clouds at once.
+    field.setClouds(cloudsRef.current, true);
 
     const size = () => {
       const rect = canvas.getBoundingClientRect();
@@ -129,6 +141,13 @@ export function FlowCanvas({
       measureRef.current = null;
     };
   }, [still, count]);
+
+  useEffect(() => {
+    const field = fieldRef.current;
+    if (!field) return;
+    field.setClouds(clouds, settled);
+    if (still) field.drawStill();
+  }, [clouds, still, settled]);
 
   useEffect(() => {
     const field = fieldRef.current;

@@ -3,10 +3,10 @@ import { Link, useNavigate } from "react-router";
 import { ApiError, CRITICS, api, type IdeaSummary, type LineupInfo, type LineupName, type RunSummary } from "../api";
 import { FlowCanvas } from "../flow/FlowCanvas";
 import type { Intensities } from "../flow/field";
-import { labelRoom, labelSide, layout } from "../flow/geometry";
+import { labelRoom, layout } from "../flow/geometry";
 import { formatSeconds } from "../flow/timeline";
-import { CRITIC_TITLES, durationBetween, formatWhen, modelName } from "../format";
-import { useReducedMotion, useSize } from "../hooks";
+import { CRITIC_SHORT, CRITIC_TITLES, durationBetween, formatWhen, modelName } from "../format";
+import { useSize } from "../hooks";
 
 const OWN = "__own__";
 const LINEUP_KEY = "skeptic.lineup";
@@ -22,9 +22,9 @@ const RESTING: Intensities = Object.fromEntries(
   ]),
 );
 
-export function StartPage() {
+/** The top of the page: what SkeptiC does, the idea and the models, and past runs. */
+export function StartSection({ currentRunId }: { currentRunId?: string }) {
   const navigate = useNavigate();
-  const reduce = useReducedMotion();
   const [ideas, setIdeas] = useState<IdeaSummary[] | null>(null);
   const [runs, setRuns] = useState<RunSummary[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -103,7 +103,7 @@ export function StartPage() {
   };
 
   return (
-    <main className="start page-enter">
+    <section className="start" id="start" aria-label="Start a run">
       <section className="start-intro">
         <h1>Put an idea in front of four critics.</h1>
         <p className="start-lede">
@@ -214,14 +214,17 @@ export function StartPage() {
             </div>
           </form>
         )}
+      </section>
 
-        {runs && runs.length > 0 && (
-          <section className="past-runs" aria-labelledby="past-runs-title">
+      {runs && runs.length > 0 && (
+          <aside className="past-runs" aria-labelledby="past-runs-title">
             <h2 id="past-runs-title">Past runs</h2>
             <ul>
               {runs.slice(0, 8).map((run) => (
                 <li key={run.id}>
-                  <Link to={`/runs/${run.id}`}>{run.idea_title}</Link>
+                  <Link to={`/runs/${run.id}`} aria-current={run.id === currentRunId ? "page" : undefined}>
+                    {run.idea_title}
+                  </Link>
                   <span className="mono">
                     {run.lineup === "local" ? "" : `${run.lineup} · `}
                     {formatWhen(run.started_at)}
@@ -234,12 +237,9 @@ export function StartPage() {
                 </li>
               ))}
             </ul>
-          </section>
-        )}
-      </section>
-
-      <PanelDiagram reduce={reduce} />
-    </main>
+          </aside>
+      )}
+    </section>
   );
 }
 
@@ -256,19 +256,20 @@ function readLineup(): LineupName {
   }
 }
 
-/** The panel's shape at rest: idea, four critics, verdict. */
-function PanelDiagram({ reduce }: { reduce: boolean }) {
+/** The panel's shape at rest, before a run is chosen: the idea above, four critics,
+ * the verdict below, with the streams drifting faintly between them. */
+export function RestingStage({ reduce }: { reduce: boolean }) {
   const [ref, size] = useSize<HTMLDivElement>();
   const l = size.width > 0 ? layout(size.width, size.height) : null;
   return (
-    <div className="start-diagram" ref={ref} aria-hidden="true">
-      <FlowCanvas intensities={RESTING} still={reduce} count={900} />
+    <div className="run-stage is-resting" ref={ref}>
+      <FlowCanvas className="run-field" intensities={RESTING} still={reduce} count={900} />
       {l && (
-        <div className="node-labels is-resting">
+        <div className="node-labels" aria-hidden="true">
           <div className="node node--idea" style={{ left: l.idea.x, top: l.idea.y }}>
             <span className="node-ring" data-state="done" />
-            <div className="node-text node-text--below" data-quiet>
-              <span className="node-title">Idea</span>
+            <div className="node-text node-text--right" data-quiet>
+              <span className="node-title">Your idea</span>
             </div>
           </div>
           {CRITICS.map((critic) => (
@@ -285,19 +286,20 @@ function PanelDiagram({ reduce }: { reduce: boolean }) {
               }
             >
               <span className="node-ring" data-state="waiting" />
-              <div className={`node-text node-text--right is-${labelSide(l, critic)}`} data-quiet>
-                <span className="node-title">{CRITIC_TITLES[critic]}</span>
+              <div className={`node-text ${l.compact ? "node-text--below" : "node-text--right"}`} data-quiet>
+                <span className="node-title">{l.compact ? CRITIC_SHORT[critic] : CRITIC_TITLES[critic]}</span>
               </div>
             </div>
           ))}
           <div className="node node--combiner" style={{ left: l.combiner.x, top: l.combiner.y }}>
             <span className="node-ring" data-state="waiting" />
-            <div className={`node-text ${l.compact ? "node-text--above" : "node-text--right"}`} data-quiet>
+            <div className="node-text node-text--right" data-quiet>
               <span className="node-title">Verdict</span>
             </div>
           </div>
         </div>
       )}
+      <p className="status-line">Choose an idea above and run the panel. The streams show which critic is working.</p>
     </div>
   );
 }

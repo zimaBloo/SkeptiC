@@ -23,7 +23,7 @@ export interface Layout {
   combiner: Point;
   /** Half the width of a stream at its widest, in px. */
   spread: number;
-  /** Narrow screens: critics further left, the verdict's label above its node. */
+  /** Narrow screens: the critics sit close together, so their labels go below them. */
   compact: boolean;
 }
 
@@ -34,9 +34,8 @@ export type NodeId = "idea" | CriticName | "combiner";
  * height, so an arrangement keeps its shape when the window is resized. */
 export type Placement = Partial<Record<NodeId, { fx: number; fy: number }>>;
 
-/** Margins a dragged node keeps from the stage's edges: clear of the top line, and
- * with room for a label below the node above the status line. */
-const EDGE = { side: 24, top: 96, bottom: 110 };
+/** Margins a dragged node keeps from the stage's edges, with room for its label. */
+const EDGE = { side: 28, top: 40, bottom: 72 };
 
 /** A point kept inside the stage's margins. */
 export function clampToStage(width: number, height: number, point: Point): Point {
@@ -54,18 +53,15 @@ export const STREAMS: StreamId[] = [
   ...CRITICS.map((c) => `out:${c}` as const),
 ];
 
+/** The panel top to bottom: the idea above, the four critics in a row, the verdict
+ * below, as the page itself reads. */
 export function layout(width: number, height: number, placement: Placement = {}): Layout {
   const compact = width < 720;
-  const centre = height * 0.52;
-  const column = Math.min(height * 0.62, 520);
+  const left = width * (compact ? 0.13 : 0.16);
+  const right = width * (compact ? 0.87 : 0.84);
+  const row = height * 0.5;
   const critics = Object.fromEntries(
-    CRITICS.map((critic, i) => [
-      critic,
-      {
-        x: width * (compact ? 0.4 : 0.56),
-        y: centre - column / 2 + (column * i) / (CRITICS.length - 1),
-      },
-    ]),
+    CRITICS.map((critic, i) => [critic, { x: left + ((right - left) * i) / (CRITICS.length - 1), y: row }]),
   ) as Record<CriticName, Point>;
   const placed = (id: NodeId, slot: Point): Point => {
     const moved = placement[id];
@@ -74,41 +70,34 @@ export function layout(width: number, height: number, placement: Placement = {})
   return {
     width,
     height,
-    idea: placed("idea", { x: width * (compact ? 0.09 : 0.13), y: centre }),
+    idea: placed("idea", { x: width / 2, y: height * 0.14 }),
     critics: Object.fromEntries(
       CRITICS.map((critic) => [critic, placed(critic, critics[critic])]),
     ) as Record<CriticName, Point>,
-    // On wide screens the verdict's label sits to the right of its node; keep at least
-    // 150 px there so it never has to be cut short.
-    combiner: placed("combiner", {
-      x: compact ? width * 0.92 : Math.min(width * 0.85, width - 150),
-      y: centre,
-    }),
-    spread: Math.max(8, Math.min(height * 0.045, compact ? 20 : 34)),
+    combiner: placed("combiner", { x: width / 2, y: height * 0.84 }),
+    spread: Math.max(8, Math.min(width * 0.022, compact ? 14 : 30)),
     compact,
   };
 }
 
-/** Room in px for a critic's label, which runs to the right of its node: up to the
- * verdict's node when that lies ahead at about the same height, else (the verdict
- * dragged out of the way, or the critic past it) up to the screen's edge. */
+/** Room in px for a critic's label, which sits to the right of its node: up to the next
+ * critic in the row, or to the stage's edge for the last one. */
 export function labelRoom(l: Layout, critic: CriticName): number {
   const { x, y } = l.critics[critic];
-  const ahead = l.combiner.x > x;
-  const level = Math.abs(l.combiner.y - y) <= 60;
-  const room = ahead && (level || l.combiner.x > x + 108) ? l.combiner.x - x - 48 : l.width - x - 40;
-  return Math.max(60, room);
+  const next = CRITICS.map((c) => l.critics[c])
+    .filter((p) => p.x > x + 4 && Math.abs(p.y - y) < 90)
+    .reduce((nearest, p) => Math.min(nearest, p.x), l.width - 12);
+  return Math.max(60, next - x - 44);
 }
 
-/** Which side of its outgoing stream a critic's label sits on. The stream leaves the
- * critic level and then bends towards the verdict, so the label takes the other side,
- * as a map sets a name beside a road rather than on it. */
+/** Which side of its node a critic's label takes on a phone, where the critics are too
+ * close together for labels beside them. */
 export function labelSide(l: Layout, critic: CriticName): "above" | "below" {
-  return l.critics[critic].y <= l.combiner.y ? "above" : "below";
+  return l.critics[critic].y <= l.combiner.y ? "below" : "above";
 }
 
-/** The curve a stream follows. Streams from the idea bow past their critic and
- * arrive from beyond it, as in the sketch; streams to the combiner arrive level. */
+/** The curve a stream follows. Streams fall from the idea and arrive at their critic
+ * from above; streams to the verdict leave downwards and gather into it. */
 export function curve(l: Layout, stream: StreamId): Curve {
   const [direction, critic] = stream.split(":") as ["in" | "out", CriticName];
   const node = l.critics[critic];
@@ -117,20 +106,17 @@ export function curve(l: Layout, stream: StreamId): Curve {
     const dy = node.y - l.idea.y;
     return {
       p0: l.idea,
-      p1: { x: l.idea.x + dx * 0.42, y: l.idea.y + dy * 0.05 },
-      p2: { x: node.x - dx * 0.4, y: node.y + dy * 0.42 },
+      p1: { x: l.idea.x + dx * 0.12, y: l.idea.y + dy * 0.62 },
+      p2: { x: node.x, y: node.y - dy * 0.5 },
       p3: node,
     };
   }
   const dx = l.combiner.x - node.x;
-  // The outer critics' streams stay level longer and turn late, so they pass beyond
-  // the inner critics' labels instead of under them.
-  const index = CRITICS.indexOf(critic);
-  const outer = index === 0 || index === CRITICS.length - 1;
+  const dy = l.combiner.y - node.y;
   return {
     p0: node,
-    p1: { x: node.x + dx * (outer ? 0.7 : 0.46), y: node.y },
-    p2: { x: l.combiner.x - dx * (outer ? 0.25 : 0.5), y: l.combiner.y },
+    p1: { x: node.x, y: node.y + dy * 0.5 },
+    p2: { x: l.combiner.x - dx * 0.12, y: l.combiner.y - dy * 0.62 },
     p3: l.combiner,
   };
 }

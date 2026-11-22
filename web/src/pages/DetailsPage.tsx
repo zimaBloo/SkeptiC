@@ -1,24 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useLocation, useParams } from "react-router";
-import type { CriticRecord, PanelRecord } from "../api";
+import { useLocation } from "react-router";
+import type { CriticRecord, PanelRecord, RunDetail } from "../api";
 import { formatSeconds } from "../flow/timeline";
-import { CRITIC_TITLES, durationBetween, formatWhen, modelName } from "../format";
-import { useRun } from "../hooks";
+import { CRITIC_TITLES, durationBetween, formatCost, formatTokens, formatWhen, modelName } from "../format";
 import { IdeaText, type Mark } from "../IdeaText";
 import { findQuote } from "../quotes";
 
-export function DetailsPage() {
-  const { id } = useParams();
+/** Each critic's issues beside the idea, with the quoted words marked, then where the
+ * run came from. A point on the verdict links here by its issue's id. */
+export function RunDetails({ run }: { run: RunDetail }) {
   const { hash } = useLocation();
-  const { run, error, missing } = useRun(id);
   const linked = issueFromHash(hash);
   // The issue the reader came for (or has focused) stays lit; hovering another one
   // lights that instead, and letting go returns to it.
   const [pinned, setPinned] = useState<string | null>(linked);
   const [hovered, setHovered] = useState<string | null>(null);
   const active = hovered ?? pinned;
-  const record = run?.record ?? null;
-  const ideaText = record?.idea ?? run?.idea_text ?? "";
+  const record = run.record;
+  const ideaText = record?.idea ?? run.idea_text;
 
   // Hover follows the pointer, but not while the page scrolls to a linked issue: the
   // browser reports whatever slides under a resting pointer as hovered. Hover counts
@@ -41,7 +40,7 @@ export function DetailsPage() {
   // Arriving from a point on the verdict: bring its issue, and the words it quotes, into view.
   const scrolled = useRef<string | null>(null);
   useEffect(() => {
-    if (!linked || !record || scrolled.current === linked) return;
+    if (!linked || linked === "issues" || !record || scrolled.current === linked) return;
     const issue = document.getElementById(`issue-${linked}`);
     if (!issue) return;
     scrolled.current = linked;
@@ -69,31 +68,16 @@ export function DetailsPage() {
     );
   }, [record, ideaText]);
 
-  if (missing) {
-    return (
-      <main className="details">
-        <p className="form-error" role="alert">
-          There is no run called {id}. <Link to="/">Start a new run</Link>
-        </p>
-      </main>
-    );
-  }
-  if (error && !run) return <main className="details"><p className="form-error">Cannot load the run: {error}</p></main>;
-  if (!run) return <main className="details"><p className="muted">Loading…</p></main>;
-
   return (
-    <main className="details page-enter">
+    <section className="details reveal" id="issues" aria-labelledby="details-title">
       <header className="details-head">
-        <h1>{run.idea_title}</h1>
+        <h2 id="details-title">What each critic found</h2>
         <p className="details-meta mono">
           {formatWhen(record?.started_at ?? null)}
           {record?.started_at && record.finished_at
             ? ` · ${formatSeconds(durationBetween(record.started_at, record.finished_at))}`
             : ""}
           {` · ${run.status}`}
-        </p>
-        <p className="details-back">
-          <Link to={`/runs/${run.id}`}>Back to the verdict</Link>
         </p>
       </header>
 
@@ -121,7 +105,7 @@ export function DetailsPage() {
       </div>
 
       {record && <Provenance record={record} runId={run.id} />}
-    </main>
+    </section>
   );
 }
 
@@ -207,6 +191,16 @@ function CriticSection(props: {
   );
 }
 
+/** The run's tokens, and its cost where the provider reports one. */
+function usageLine(record: PanelRecord): string {
+  const usages = [...record.critics.map((c) => c.usage), record.combiner.usage].filter((u) => u != null);
+  if (usages.length === 0) return "not recorded";
+  const tokens = usages.reduce((sum, u) => sum + (u.input_tokens ?? 0) + (u.output_tokens ?? 0), 0);
+  const costs = usages.map((u) => u.cost).filter((c): c is number => c !== null && c !== undefined);
+  const cost = costs.length ? costs.reduce((a, b) => a + b, 0) : null;
+  return `${formatTokens(tokens)} tokens${cost !== null ? ` · ${formatCost(cost)}` : ""}`;
+}
+
 /** The run's generation settings in a line, e.g. "frontier lineup · reasoning low · ...". */
 function settingsLine(record: PanelRecord): string {
   const s = record.settings;
@@ -237,6 +231,7 @@ function Provenance({ record, runId }: { record: PanelRecord; runId: string }) {
     ["Inspect AI", record.inspect_version ?? "unknown"],
     ["Ollama", record.ollama_version ?? (usesOllama ? "unknown (the version lookup failed)" : "not used")],
     ["Settings", settingsLine(record)],
+    ["Tokens and cost", usageLine(record)],
   ];
   const s = record.scores;
   const checks = [

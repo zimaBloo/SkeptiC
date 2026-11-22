@@ -16,10 +16,19 @@ describe("layout with dragged nodes", () => {
     expect(layout(2000, 1000, placement).combiner).toEqual({ x: 1400, y: 400 });
   });
 
-  it("keeps a dragged node clear of the edges, the top line and the status line", () => {
-    expect(clampToStage(1440, 900, { x: -50, y: 10 })).toEqual({ x: 24, y: 96 });
-    expect(clampToStage(1440, 900, { x: 5000, y: 5000 })).toEqual({ x: 1416, y: 790 });
-    expect(layout(1440, 900, { idea: { fx: 0, fy: 1 } }).idea).toEqual({ x: 24, y: 790 });
+  it("keeps a dragged node clear of the stage's edges and the status line", () => {
+    expect(clampToStage(1440, 900, { x: -50, y: 10 })).toEqual({ x: 28, y: 40 });
+    expect(clampToStage(1440, 900, { x: 5000, y: 5000 })).toEqual({ x: 1412, y: 828 });
+    expect(layout(1440, 900, { idea: { fx: 0, fy: 1 } }).idea).toEqual({ x: 28, y: 828 });
+  });
+
+  it("runs the panel top to bottom: the idea above the critics' row, the verdict below", () => {
+    const l = layout(1440, 900);
+    const ys = Object.values(l.critics).map((p) => p.y);
+    expect(new Set(ys).size).toBe(1);
+    expect(l.idea.y).toBeLessThan(ys[0] as number);
+    expect(l.combiner.y).toBeGreaterThan(ys[0] as number);
+    expect(l.idea.x).toBe(720);
   });
 
   it("routes the streams to a node's new place", () => {
@@ -28,15 +37,14 @@ describe("layout with dragged nodes", () => {
     expect(curve(moved, "out:risk").p0).toEqual(moved.critics.risk);
   });
 
-  it("gives a critic dragged past the verdict room up to the screen's edge", () => {
-    const moved = layout(1440, 900, { market: { fx: 0.9, fy: 0.2 } });
-    expect(labelRoom(moved, "market")).toBe(1440 - 1296 - 40);
-    const plain = layout(1440, 900);
-    expect(labelRoom(plain, "market")).toBe(plain.combiner.x - plain.critics.market.x - 48);
+  it("ends a critic's label before the next critic in the row, the last one at the edge", () => {
+    const l = layout(1440, 900);
+    expect(labelRoom(l, "market")).toBe(l.critics.technical.x - l.critics.market.x - 44);
+    expect(labelRoom(l, "risk")).toBe(1440 - 12 - l.critics.risk.x - 44);
   });
 
-  it("does not let a critic's label run over a verdict just ahead of it at the same height", () => {
-    const close = layout(1440, 900, { technical: { fx: 0.56, fy: 0.52 }, combiner: { fx: 0.625, fy: 0.52 } });
-    expect(labelRoom(close, "technical")).toBe(60);
+  it("gives a critic dragged out of the row room up to the screen's edge", () => {
+    const moved = layout(1440, 900, { market: { fx: 0.3, fy: 0.3 } });
+    expect(labelRoom(moved, "market")).toBe(1440 - 12 - 432 - 44);
   });
 });

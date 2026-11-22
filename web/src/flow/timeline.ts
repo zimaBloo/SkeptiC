@@ -1,7 +1,7 @@
 // When each step of a run started and ended, read from live progress events or
 // from a finished record, and what state every step was in at a given moment.
 
-import { CRITICS, type CriticName, type Overall, type PanelRecord, type ProgressEvent } from "../api";
+import { CRITICS, type CriticName, type Overall, type PanelRecord, type ProgressEvent, type Usage } from "../api";
 
 export type StepState = "waiting" | "working" | "done" | "failed";
 export type StepName = CriticName | "combiner";
@@ -14,6 +14,11 @@ export interface Step {
   issues: number | null;
   overall: Overall | null;
   error: string | null;
+  /** The critic's most serious issue, once it has answered. */
+  topIssue: string | null;
+  /** Points in the verdict, for the combining step. */
+  points: number | null;
+  usage: Usage | null;
 }
 
 export interface Timeline {
@@ -29,7 +34,18 @@ const STEPS: StepName[] = [...CRITICS, "combiner"];
 export const CUT_OFF = "stopped before it answered";
 
 function emptyStep(): Step {
-  return { start: null, end: null, ok: null, model: null, issues: null, overall: null, error: null };
+  return {
+    start: null,
+    end: null,
+    ok: null,
+    model: null,
+    issues: null,
+    overall: null,
+    error: null,
+    topIssue: null,
+    points: null,
+    usage: null,
+  };
 }
 
 function emptyTimeline(): Timeline {
@@ -63,13 +79,21 @@ export function timelineFromEvents(events: ProgressEvent[], ended = false, ended
           issues: event.issues,
           overall: event.overall,
           error: event.error,
+          topIssue: event.top_issue ?? null,
+          usage: event.usage ?? null,
         });
         break;
       case "combiner_started":
         Object.assign(timeline.steps.combiner, { start: at, model: event.model });
         break;
       case "combiner_finished":
-        Object.assign(timeline.steps.combiner, { end: at, ok: event.ok, error: event.error });
+        Object.assign(timeline.steps.combiner, {
+          end: at,
+          ok: event.ok,
+          error: event.error,
+          points: event.points,
+          usage: event.usage ?? null,
+        });
         break;
       case "run_finished":
         timeline.end = at;
@@ -114,6 +138,9 @@ export function timelineFromRecord(record: PanelRecord): Timeline {
       issues: critic.verdict?.issues.length ?? null,
       overall: critic.verdict?.overall ?? null,
       error: critic.error,
+      topIssue: critic.verdict?.issues[0]?.issue ?? null,
+      points: null,
+      usage: critic.usage ?? null,
     };
   }
   const combiner = record.combiner;
@@ -124,6 +151,8 @@ export function timelineFromRecord(record: PanelRecord): Timeline {
     ok: combiner.combined !== null,
     model: combiner.model,
     error: combiner.error,
+    points: combiner.combined?.points.length ?? null,
+    usage: combiner.usage ?? null,
   };
   const starts = STEPS.map((name) => timeline.steps[name].start).filter((t): t is number => t !== null);
   timeline.start = ms(record.started_at) ?? (starts.length ? Math.min(...starts) : null);
@@ -166,4 +195,26 @@ export function formatSeconds(seconds: number | null): string {
   const minutes = Math.floor(whole / 60);
   const rest = String(whole % 60).padStart(2, "0");
   return `${minutes}:${rest}`;
+}
+
+/** Tokens a step used: prompt and reply together, or null while unknown. */
+export function stepTokens(step: Step): number | null {
+  const u = step.usage;
+  if (!u || (u.input_tokens === null && u.output_tokens === null)) return null;
+  return (u.input_tokens ?? 0) + (u.output_tokens ?? 0);
+}
+
+/** The run's tokens and cost so far, over the steps that have reported them. */
+export function runTotals(timeline: Timeline, at: number): { tokens: number; cost: number | null; done: number } {
+  let tokens = 0;
+  let cost: number | null = null;
+  let done = 0;
+  for (const name of STEPS) {
+    const step = timeline.steps[name];
+    if (step.end === null || step.end > at) continue;
+    done += 1;
+    tokens += stepTokens(step) ?? 0;
+    if (step.usage?.cost != null) cost = (cost ?? 0) + step.usage.cost;
+  }
+  return { tokens, cost, done };
 }

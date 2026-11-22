@@ -10,6 +10,11 @@ export function useRun(id: string | undefined): { run: RunDetail | null; error: 
   const [missing, setMissing] = useState(false);
 
   useEffect(() => {
+    // Another run (or none): forget the last one at once, so its state never shows
+    // under the new address.
+    setRun(null);
+    setError(null);
+    setMissing(false);
     if (!id) return;
     let cancelled = false;
     let timer: number | undefined;
@@ -107,7 +112,9 @@ export function useRevealGuard<T extends Element>(trigger?: unknown, ms = 4000):
   return ref;
 }
 
-const PLACEMENT_KEY = "skeptic.placement";
+// v2: the panel runs top to bottom; arrangements saved for the old left-to-right
+// layout would land in odd places, so they are not read.
+const PLACEMENT_KEY = "skeptic.placement.v2";
 const NODE_IDS: NodeId[] = ["idea", ...CRITICS, "combiner"];
 
 /** Where the viewer has dragged the run page's nodes. Kept for the browser tab, so an

@@ -43,6 +43,14 @@ export interface RunSummary {
   finished_at: string | null;
 }
 
+/** Tokens and cost of a step's model calls; cost only where the provider reports it. */
+export interface Usage {
+  input_tokens: number | null;
+  output_tokens: number | null;
+  reasoning_tokens?: number | null;
+  cost: number | null;
+}
+
 export type ProgressEvent =
   | {
       time: string;
@@ -59,11 +67,20 @@ export type ProgressEvent =
       ok: boolean;
       issues: number | null;
       overall: Overall | null;
+      top_issue?: string | null;
       error: string | null;
+      usage?: Usage | null;
     }
   | { time: string; event: "combiner_started"; model: string }
   | { time: string; event: "repair_started" }
-  | { time: string; event: "combiner_finished"; ok: boolean; points: number | null; error: string | null }
+  | {
+      time: string;
+      event: "combiner_finished";
+      ok: boolean;
+      points: number | null;
+      error: string | null;
+      usage?: Usage | null;
+    }
   | { time: string; event: "run_finished"; ok: boolean; error: string | null };
 
 export interface Issue {
@@ -112,6 +129,7 @@ export interface CriticRecord {
   model_overall: Overall | null;
   capped: number[];
   checks: VerdictChecks | null;
+  usage?: Usage | null;
   error: string | null;
 }
 
@@ -151,6 +169,7 @@ export interface CombinerRecord {
   served: ServedModel | null;
   timing: CallTiming;
   combined: CombinedVerdict | null;
+  usage?: Usage | null;
   error: string | null;
   repair_error?: string | null;
 }

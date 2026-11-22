@@ -3,6 +3,7 @@
 // intensity (0 to 1) sets how many streaks it carries and how fast they move.
 // The pointer pushes nearby streaks aside; they drift back to their path.
 
+import { CRITICS, type CriticName } from "../api";
 import {
   STREAMS,
   bundleWidth,
@@ -18,6 +19,13 @@ import {
 } from "./geometry";
 
 export type Intensities = Partial<Record<StreamId, number>>;
+
+/** Nodes that gather a cloud when their step is done: each critic and the verdict. */
+export type CloudNode = CriticName | "combiner";
+/** How big each node's cloud is, from 0 (none) to 1 (the largest). */
+export type Clouds = Partial<Record<CloudNode, number>>;
+
+const CLOUD_NODES: CloudNode[] = [...CRITICS, "combiner"];
 
 /** A rectangle in CSS px, relative to the canvas. */
 export interface Rect {
@@ -40,6 +48,23 @@ interface Particle {
   x: number; // where the streak was drawn to last frame
   y: number;
   nx: number; // where it is now
+  ny: number;
+  fresh: boolean;
+}
+
+/** A streak that has arrived at a finished step and now circles its node. */
+interface CloudParticle {
+  node: number; // index into CLOUD_NODES
+  angle: number;
+  /** Where in the cloud it settles, 0 (inner edge) to 1 (outer edge). */
+  depth: number;
+  /** How far out it has drifted so far, 0 to 1: arrivals start at the node and spread. */
+  reach: number;
+  spin: number; // radians per second
+  phase: number;
+  x: number;
+  y: number;
+  nx: number;
   ny: number;
   fresh: boolean;
 }
@@ -68,6 +93,11 @@ const JOIN_SECONDS = 3.5;
 const TRIM_EVERY = 15;
 const TRIM_STEP = 4 / 255;
 const TRIM_FILTER_ID = "skeptic-trail-trim";
+// A full cloud holds this many streaks; a smaller one fewer, by its size.
+const CLOUD_MAX = 170;
+// Radius of a cloud's inner edge and how far a full cloud reaches past it, in px.
+const CLOUD_INNER = 22;
+const CLOUD_REACH = 54;
 
 export class FlowField {
   private readonly ctx: CanvasRenderingContext2D;
@@ -89,6 +119,10 @@ export class FlowField {
   private last = 0;
   private running = false;
   private readonly canTrim: boolean;
+  private readonly cloud: CloudParticle[] = [];
+  private cloudSize = new Float32Array(CLOUD_NODES.length);
+  private cloudCount = new Int32Array(CLOUD_NODES.length);
+  private readonly cloudColours: string[];
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -99,6 +133,11 @@ export class FlowField {
     this.ctx = ctx;
     this.canTrim = typeof ctx.filter === "string" && ensureTrimFilter();
     this.colours = STREAMS.map((id) => options.colours[id]);
+    // A critic's cloud takes the colour of the stream that fed it; the verdict's, the
+    // colour every outgoing stream ends in.
+    this.cloudColours = CLOUD_NODES.map((node) =>
+      node === "combiner" ? options.colours["out:market"] : options.colours[`in:${node}`],
+    );
     const count = options.count ?? 1250;
     for (let i = 0; i < count; i++) this.particles.push(this.spawn(true));
   }
@@ -142,6 +181,52 @@ export class FlowField {
       if (moved(old.p0, c.p0) || moved(old.p3, c.p3)) jumped.add(i);
     });
     if (jumped.size) for (const p of this.particles) if (jumped.has(p.stream)) p.fresh = true;
+  }
+
+  /** Set each finished step's cloud size. Streaks that reach a finished node join its
+   * cloud until it is full; with `immediate` (a finished run opened later) the clouds
+   * are filled at once. A size of 0 empties that node's cloud. */
+  setClouds(clouds: Clouds, immediate = false): void {
+    CLOUD_NODES.forEach((node, i) => {
+      const size = Math.min(1, Math.max(0, clouds[node] ?? 0));
+      this.cloudSize[i] = size;
+      const capacity = Math.round(size * CLOUD_MAX);
+      if (capacity === 0 && (this.cloudCount[i] ?? 0) > 0) {
+        for (let k = this.cloud.length - 1; k >= 0; k--) if (this.cloud[k]?.node === i) this.cloud.splice(k, 1);
+        this.cloudCount[i] = 0;
+      }
+      if (immediate) {
+        while ((this.cloudCount[i] ?? 0) < capacity) this.addCloud(i, true);
+      }
+    });
+  }
+
+  private addCloud(node: number, settled: boolean): void {
+    this.cloud.push({
+      node,
+      angle: Math.random() * Math.PI * 2,
+      depth: Math.pow(Math.random(), 0.7),
+      reach: settled ? 1 : 0,
+      spin: (0.18 + Math.random() * 0.32) * (node % 2 === 0 ? 1 : -1),
+      phase: Math.random() * Math.PI * 2,
+      x: 0,
+      y: 0,
+      nx: 0,
+      ny: 0,
+      fresh: true,
+    });
+    this.cloudCount[node] = (this.cloudCount[node] ?? 0) + 1;
+  }
+
+  /** The node a stream ends at, as an index into CLOUD_NODES. */
+  private endNode(stream: number): number {
+    const id = STREAMS[stream] ?? "";
+    return id.startsWith("in:") ? CLOUD_NODES.indexOf(id.slice(3) as CriticName) : CLOUD_NODES.indexOf("combiner");
+  }
+
+  private nodePoint(node: number): { x: number; y: number } {
+    const id = CLOUD_NODES[node];
+    return id === "combiner" || id === undefined ? this.layout.combiner : this.layout.critics[id];
   }
 
   setPointer(point: { x: number; y: number } | null): void {
@@ -218,6 +303,23 @@ export class FlowField {
         ctx.globalAlpha = 0.18 + 0.5 * strength;
         ctx.lineWidth = 1;
         ctx.stroke();
+      }
+    });
+    // Clouds as still rings of dots, their size the same as in motion.
+    CLOUD_NODES.forEach((_, node) => {
+      const size = this.cloudSize[node] ?? 0;
+      if (size === 0) return;
+      const centre = this.nodePoint(node);
+      ctx.fillStyle = this.cloudColours[node] ?? "#fff";
+      ctx.globalAlpha = 0.5;
+      const dots = Math.round(size * 60);
+      for (let d = 0; d < dots; d++) {
+        const angle = (d / dots) * Math.PI * 2;
+        const radius = CLOUD_INNER + CLOUD_REACH * size * (0.4 + 0.6 * ((d * 7) % 10) / 10);
+        const x = centre.x + Math.cos(angle) * radius;
+        const y = centre.y + Math.sin(angle) * radius * 0.86;
+        if (this.inQuietZone(x, y)) continue;
+        ctx.fillRect(x - 0.6, y - 0.6, 1.2, 1.2);
       }
     });
     ctx.globalAlpha = 1;
@@ -298,6 +400,11 @@ export class FlowField {
       const length = this.lengths[p.stream] ?? 1;
       p.t += (p.speed * dt * (stopping ? 1 : 0.25 + 0.75 * intensity)) / length;
       if (p.t >= 1) {
+        // A streak that reaches a finished step stays there, in its cloud.
+        const node = this.endNode(p.stream);
+        if (stopping && node >= 0 && (this.cloudCount[node] ?? 0) < Math.round((this.cloudSize[node] ?? 0) * CLOUD_MAX)) {
+          this.addCloud(node, false);
+        }
         p = this.spawn(false);
         this.particles[k] = p;
         if (p.stream === DORMANT) continue;
@@ -332,6 +439,61 @@ export class FlowField {
       p.nx = x;
       p.ny = y;
     }
+    this.stepClouds(dt);
+  }
+
+  private stepClouds(dt: number): void {
+    const time = performance.now() / 1000;
+    // Streaks still on their way fill most of a cloud; a cloud whose stream had few
+    // left tops itself up slowly from the node.
+    CLOUD_NODES.forEach((_, node) => {
+      const capacity = Math.round((this.cloudSize[node] ?? 0) * CLOUD_MAX);
+      if ((this.cloudCount[node] ?? 0) < capacity && Math.random() < dt * 25) this.addCloud(node, false);
+    });
+    for (const c of this.cloud) {
+      const centre = this.nodePoint(c.node);
+      const size = this.cloudSize[c.node] ?? 0;
+      c.reach = Math.min(1, c.reach + dt * 0.9);
+      c.angle += c.spin * dt;
+      const breathe = 1 + 0.08 * Math.sin(c.phase + time * 0.7);
+      // On a phone the critics stand close together, so their clouds stay smaller.
+      const scale = this.layout.compact ? 0.62 : 1;
+      const radius =
+        (CLOUD_INNER + CLOUD_REACH * size * c.depth) * scale * breathe * (0.35 + 0.65 * easeOut(c.reach));
+      const x = centre.x + Math.cos(c.angle) * radius;
+      const y = centre.y + Math.sin(c.angle) * radius * 0.86;
+      if (c.fresh) {
+        c.x = x;
+        c.y = y;
+        c.fresh = false;
+      }
+      c.nx = x;
+      c.ny = y;
+    }
+  }
+
+  private drawClouds(): void {
+    const { ctx } = this;
+    ctx.lineWidth = 0.9;
+    CLOUD_NODES.forEach((_, node) => {
+      ctx.beginPath();
+      let any = false;
+      for (const c of this.cloud) {
+        if (c.node !== node) continue;
+        if (!this.inQuietZone(c.nx, c.ny)) {
+          ctx.moveTo(c.x, c.y);
+          ctx.lineTo(c.nx, c.ny);
+          any = true;
+        }
+        c.x = c.nx;
+        c.y = c.ny;
+      }
+      if (!any) return;
+      ctx.strokeStyle = this.cloudColours[node] ?? "#fff";
+      ctx.globalAlpha = 0.55;
+      ctx.stroke();
+    });
+    ctx.globalAlpha = 1;
   }
 
   private draw(dt: number): void {
@@ -391,7 +553,12 @@ export class FlowField {
       }
     }
     ctx.globalAlpha = 1;
+    this.drawClouds();
   }
+}
+
+function easeOut(t: number): number {
+  return 1 - Math.pow(1 - t, 3);
 }
 
 /** Put the trail-trim filter in the document once: alpha minus TRIM_STEP, colour

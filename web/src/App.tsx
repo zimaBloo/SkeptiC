@@ -1,16 +1,15 @@
-import { Link, NavLink, Outlet, Route, Routes, useLocation } from "react-router";
+import { Link, Navigate, NavLink, Outlet, Route, Routes, useLocation, useParams } from "react-router";
 import { useRevealGuard } from "./hooks";
-import { DetailsPage } from "./pages/DetailsPage";
-import { RunPage } from "./pages/RunPage";
-import { StartPage } from "./pages/StartPage";
+import { Page } from "./pages/Page";
 
 export function App() {
   return (
     <Routes>
       <Route element={<Frame />}>
-        <Route index element={<StartPage />} />
-        <Route path="runs/:id" element={<RunPage />} />
-        <Route path="runs/:id/details" element={<DetailsPage />} />
+        <Route index element={<Page />} />
+        <Route path="runs/:id" element={<Page />} />
+        {/* The details used to be a page of their own; they are a section now. */}
+        <Route path="runs/:id/details" element={<DetailsRedirect />} />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>
@@ -31,9 +30,15 @@ function Frame() {
           </NavLink>
         </nav>
       </header>
-      <Outlet key={location.pathname} />
+      <Outlet />
     </div>
   );
+}
+
+function DetailsRedirect() {
+  const { id } = useParams();
+  const { hash } = useLocation();
+  return <Navigate to={`/runs/${id ?? ""}${hash || "#issues"}`} replace />;
 }
 
 function NotFound() {
