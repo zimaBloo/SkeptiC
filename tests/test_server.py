@@ -174,12 +174,91 @@ def test_run_on_a_sample_idea_starts_the_panel_process(
         str(folder / "progress.jsonl"),
         "--idea-id",
         "shelfsense",
+        "--lineup",
+        "local",
         "--log-dir",
         "logs",
     ]
     assert cwd == root.resolve()
     assert output == root.resolve() / folder / "process.log"
     assert (root / folder / "idea.md").read_text(encoding="utf-8") == SAMPLE
+    assert (root / folder / "lineup").read_text(encoding="utf-8") == "local"
+    assert client.get(f"/api/runs/{run_id}").json()["lineup"] == "local"
+
+
+@pytest.fixture
+def no_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Inspect loads the project's .env into the environment when a test runs the
+    # panel, so a real key may be there.
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+
+def test_lineups_are_listed_with_what_each_still_needs(client: TestClient, no_key: None) -> None:
+    lineups = {lineup["name"]: lineup for lineup in client.get("/api/lineups").json()}
+
+    assert set(lineups) == {"local", "frontier"}
+    assert lineups["local"]["ready"] is True
+    assert lineups["local"]["missing_key"] is None
+    assert lineups["frontier"]["ready"] is False
+    assert lineups["frontier"]["missing_key"] == "OPENROUTER_API_KEY"
+    assert lineups["frontier"]["models"]["combiner"].startswith("openrouter/")
+
+
+def test_frontier_run_without_a_key_is_refused(
+    client: TestClient, launcher: FakeLauncher, no_key: None
+) -> None:
+    response = client.post("/api/runs", json={"idea_id": "shelfsense", "lineup": "frontier"})
+
+    assert response.status_code == 400
+    assert "OPENROUTER_API_KEY" in response.json()["detail"]
+    assert launcher.calls == []
+
+
+def test_frontier_run_with_a_key_in_env_file_starts(
+    client: TestClient, root: Path, launcher: FakeLauncher, no_key: None
+) -> None:
+    (root / ".env").write_text("OPENROUTER_API_KEY=sk-or-test\n", encoding="utf-8")
+
+    lineups = {lineup["name"]: lineup for lineup in client.get("/api/lineups").json()}
+    run_id = start(client, {"idea_id": "shelfsense", "lineup": "frontier"})
+
+    assert lineups["frontier"]["ready"] is True
+    [(command, _, _)] = launcher.calls
+    assert command[command.index("--lineup") + 1] == "frontier"
+    assert "sk-or-test" not in " ".join(command)
+    assert client.get("/api/runs").json()[0]["lineup"] == "frontier"
+    assert client.get(f"/api/runs/{run_id}").json()["lineup"] == "frontier"
+
+
+def test_key_in_env_file_above_the_project_counts_as_for_the_command(
+    root: Path, launcher: FakeLauncher, no_key: None
+) -> None:
+    # The run's own process finds .env the same way: in its folder or above it.
+    project = root / "project"
+    project.mkdir()
+    (root / "ideas").rename(project / "ideas")
+    (root / ".env").write_text("OPENROUTER_API_KEY=sk-or-test\n", encoding="utf-8")
+
+    with TestClient(create_app(project, launcher, HOSTS)) as client:
+        lineups = {lineup["name"]: lineup for lineup in client.get("/api/lineups").json()}
+        run_id = start(client, {"idea_id": "shelfsense", "lineup": "frontier"})
+
+    assert lineups["frontier"]["ready"] is True
+    assert (project / "runs" / run_id / "lineup").read_text(encoding="utf-8") == "frontier"
+
+
+def test_unknown_lineup_is_refused(client: TestClient, launcher: FakeLauncher) -> None:
+    response = client.post("/api/runs", json={"idea_id": "shelfsense", "lineup": "cloud"})
+
+    assert response.status_code == 422
+    assert launcher.calls == []
+
+
+def test_run_from_before_lineups_ran_on_the_local_one(client: TestClient, root: Path) -> None:
+    run_id = start(client)
+    (root / "runs" / run_id / "lineup").unlink()
+
+    assert client.get(f"/api/runs/{run_id}").json()["lineup"] == "local"
 
 
 def test_run_on_pasted_text_puts_the_title_above_the_text(

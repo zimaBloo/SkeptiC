@@ -1,10 +1,12 @@
-"""A local web API for the web UI: the sample ideas, and panel runs with their progress.
+"""A local web API for the web UI: the sample ideas, the model lineups, and panel
+runs with their progress.
 
-Each run is a `skeptic run` process of its own. Only one runs at a time, since
-the local models share one Ollama server. A run keeps its files in
-runs/<run_id>/:
+Each run is a `skeptic run` process of its own. Only one runs at a time: the
+local models share one Ollama server, and a demo follows one run anyway. A run
+keeps its files in runs/<run_id>/:
 
     idea.md         the idea the critics read
+    lineup          the name of the lineup it runs on (older runs: local)
     progress.jsonl  the panel's progress events (see skeptic.progress)
     record.json     the run record, once the run has ended
     process.log     what the process printed
@@ -42,6 +44,7 @@ from starlette.datastructures import Headers
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from skeptic.lineups import LINEUPS, LineupName, get_lineup, missing_key
 from skeptic.progress import ProgressEvent, read_events
 from skeptic.record import PanelRecord
 
@@ -80,6 +83,17 @@ class Idea(BaseModel):
     text: str
 
 
+class LineupInfo(BaseModel):
+    name: LineupName
+    title: str
+    description: str
+    models: dict[str, str] = Field(description="The model of every role, the combiner included.")
+    ready: bool = Field(description="The lineup can run now: any API key it needs is set.")
+    missing_key: str | None = Field(
+        description="The environment variable to set in .env before the lineup can run."
+    )
+
+
 class RunRequest(BaseModel):
     """A run on a sample idea (idea_id), or on pasted text (title and text)."""
 
@@ -88,6 +102,7 @@ class RunRequest(BaseModel):
     idea_id: Slug | None = None
     title: Title | None = None
     text: IdeaText | None = None
+    lineup: LineupName = "local"
 
     @model_validator(mode="after")
     def check_source(self) -> Self:
@@ -105,6 +120,7 @@ class RunCreated(BaseModel):
 class RunSummary(BaseModel):
     id: str
     idea_title: str
+    lineup: LineupName
     status: RunStatus
     started_at: datetime
     finished_at: datetime | None
@@ -164,7 +180,7 @@ class Runs:
         self.processes: dict[str, RunProcess] = {}
         self.lock = threading.Lock()
 
-    def start(self, slug: str, idea: str) -> str:
+    def start(self, slug: str, idea: str, lineup: LineupName = "local") -> str:
         """Start a run on the idea text and return its id."""
         with self.lock:
             active = self.active()
@@ -172,6 +188,7 @@ class Runs:
                 raise HTTPException(409, f"run {active} is still going; one run at a time")
             run_id, folder = self._new_folder(slug)
             (folder / "idea.md").write_text(idea, encoding="utf-8")
+            (folder / "lineup").write_text(lineup, encoding="utf-8")
             files = folder.relative_to(self.root)
             command = [
                 sys.executable,
@@ -185,6 +202,8 @@ class Runs:
                 str(files / "progress.jsonl"),
                 "--idea-id",
                 slug,
+                "--lineup",
+                lineup,
                 "--log-dir",
                 "logs",
             ]
@@ -246,6 +265,7 @@ class Runs:
         return RunSummary(
             id=run_id,
             idea_title=markdown_title(idea, run_id.split("-", 2)[2]),
+            lineup=_read_lineup(folder / "lineup"),
             status=state.status,
             started_at=datetime.strptime(run_id[:15], "%Y%m%d-%H%M%S").replace(tzinfo=UTC),
             finished_at=state.finished_at,
@@ -354,14 +374,36 @@ def create_app(
     def get_idea(idea_id: Annotated[str, PathParam(pattern=SLUG)]) -> Idea:
         return sample_idea(ideas, idea_id)
 
+    @app.get("/api/lineups")
+    def list_lineups() -> list[LineupInfo]:
+        infos = []
+        for lineup in LINEUPS.values():
+            key = missing_key(lineup, root)
+            infos.append(
+                LineupInfo(
+                    name=lineup.name,
+                    title=lineup.title,
+                    description=lineup.description,
+                    models=dict(lineup.models),
+                    ready=key is None,
+                    missing_key=key,
+                )
+            )
+        return infos
+
     @app.post("/api/runs", status_code=202)
     def start_run(request: RunRequest) -> RunCreated:
+        key = missing_key(get_lineup(request.lineup), root)
+        if key is not None:
+            raise HTTPException(
+                400, f"the {request.lineup} lineup needs an API key: put {key}=... in .env"
+            )
         if request.idea_id is not None:
             idea = sample_idea(ideas, request.idea_id)
-            return RunCreated(id=runs.start(idea.id, idea.text))
+            return RunCreated(id=runs.start(idea.id, idea.text, request.lineup))
         assert request.title is not None and request.text is not None
         text = f"# {request.title}\n\n{request.text}\n"
-        return RunCreated(id=runs.start(slugify(request.title), text))
+        return RunCreated(id=runs.start(slugify(request.title), text, request.lineup))
 
     @app.get("/api/runs")
     def list_runs() -> list[RunSummary]:
@@ -473,6 +515,15 @@ def _modified(path: Path) -> datetime | None:
         return datetime.fromtimestamp(path.stat().st_mtime, UTC)
     except OSError:
         return None
+
+
+def _read_lineup(path: Path) -> LineupName:
+    """The lineup a run used. Runs from before lineups existed ran on the local one."""
+    try:
+        name = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return "local"
+    return get_lineup(name).name if name in LINEUPS else "local"
 
 
 def _read_time(path: Path) -> datetime | None:
