@@ -207,6 +207,22 @@ function CriticSection(props: {
   );
 }
 
+/** The run's generation settings in a line, e.g. "frontier lineup · reasoning low · ...". */
+function settingsLine(record: PanelRecord): string {
+  const s = record.settings;
+  const parts: string[] = [];
+  if (typeof s.lineup === "string") parts.push(`${s.lineup} lineup`);
+  if (typeof s.reasoning === "string") parts.push(`reasoning ${s.reasoning}`);
+  else if (typeof s.thinking === "boolean") parts.push(s.thinking ? "thinking on" : "thinking off");
+  if (typeof s.max_tokens === "number") parts.push(`replies up to ${s.max_tokens} tokens`);
+  if (typeof s.temperature === "number") parts.push(`temperature ${s.temperature}`);
+  if (typeof s.seed === "number") parts.push(`seed ${s.seed}`);
+  if (typeof record.critics_parallel === "boolean") {
+    parts.push(record.critics_parallel ? "critics at the same time" : "critics one after another");
+  }
+  return parts.length ? parts.join(" · ") : "not recorded";
+}
+
 function Provenance({ record, runId }: { record: PanelRecord; runId: string }) {
   const models = [
     ...record.critics.map((c) => [CRITIC_TITLES[c.critic], c.model, c.served] as const),
@@ -220,6 +236,7 @@ function Provenance({ record, runId }: { record: PanelRecord; runId: string }) {
     ["Prompts", record.prompts_sha256 ? `sha256 ${record.prompts_sha256.slice(0, 12)}` : "unknown"],
     ["Inspect AI", record.inspect_version ?? "unknown"],
     ["Ollama", record.ollama_version ?? (usesOllama ? "unknown (the version lookup failed)" : "not used")],
+    ["Settings", settingsLine(record)],
   ];
   const s = record.scores;
   const checks = [

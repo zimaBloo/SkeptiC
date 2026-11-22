@@ -1,14 +1,15 @@
 import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
-import { ApiError, CRITICS, api, type IdeaSummary, type RunSummary } from "../api";
+import { ApiError, CRITICS, api, type IdeaSummary, type LineupInfo, type LineupName, type RunSummary } from "../api";
 import { FlowCanvas } from "../flow/FlowCanvas";
 import type { Intensities } from "../flow/field";
 import { labelRoom, labelSide, layout } from "../flow/geometry";
 import { formatSeconds } from "../flow/timeline";
-import { CRITIC_TITLES, durationBetween, formatWhen } from "../format";
+import { CRITIC_TITLES, durationBetween, formatWhen, modelName } from "../format";
 import { useReducedMotion, useSize } from "../hooks";
 
 const OWN = "__own__";
+const LINEUP_KEY = "skeptic.lineup";
 const MIN_CHARS = 200;
 const MAX_CHARS = 20000;
 const MAX_TITLE = 200; // the server's limit
@@ -28,6 +29,8 @@ export function StartPage() {
   const [runs, setRuns] = useState<RunSummary[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [choice, setChoice] = useState<string>("");
+  const [lineups, setLineups] = useState<LineupInfo[] | null>(null);
+  const [lineup, setLineup] = useState<LineupName>(readLineup);
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -36,11 +39,12 @@ export function StartPage() {
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([api.ideas(), api.runs()])
-      .then(([i, r]) => {
+    Promise.all([api.ideas(), api.runs(), api.lineups()])
+      .then(([i, r, m]) => {
         if (cancelled) return;
         setIdeas(i);
         setRuns(r);
+        setLineups(m);
         setLoadError(null);
         setChoice((current) => current || (i[0]?.id ?? OWN));
       })
@@ -62,9 +66,18 @@ export function StartPage() {
     return () => window.clearTimeout(timer);
   }, [loadError, activeRun, loads]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(LINEUP_KEY, lineup);
+    } catch {
+      // Only a convenience: the choice is not remembered.
+    }
+  }, [lineup]);
+
+  const chosenLineup = lineups?.find((m) => m.name === lineup) ?? null;
   const ownLength = text.trim().length;
   const ownReady = choice !== OWN || (title.trim().length > 0 && ownLength >= MIN_CHARS && ownLength <= MAX_CHARS);
-  const ready = choice !== "" && ownReady && activeRun === null;
+  const ready = choice !== "" && ownReady && activeRun === null && chosenLineup?.ready === true;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -74,13 +87,13 @@ export function StartPage() {
     try {
       const { id } =
         choice === OWN
-          ? await api.startRun({ title: title.trim(), text: text.trim() })
-          : await api.startRun({ idea_id: choice });
+          ? await api.startRun({ title: title.trim(), text: text.trim(), lineup })
+          : await api.startRun({ idea_id: choice, lineup });
       navigate(`/runs/${id}`);
     } catch (e) {
       setSubmitError(
         e instanceof ApiError && e.status === 409
-          ? "Another run is still going. The local models run one at a time."
+          ? "Another run is still going. The panel takes one idea at a time."
           : e instanceof Error
             ? e.message
             : String(e),
@@ -158,6 +171,32 @@ export function StartPage() {
               </div>
             )}
 
+            <fieldset className="idea-choices" disabled={submitting}>
+              <legend>Models</legend>
+              {lineups === null && <p className="muted">Loading…</p>}
+              {lineups?.map((option) => (
+                <label key={option.name} className="idea-choice">
+                  <input
+                    type="radio"
+                    name="lineup"
+                    value={option.name}
+                    checked={lineup === option.name}
+                    onChange={() => setLineup(option.name)}
+                  />
+                  <span className="idea-choice-title">{option.title}</span>
+                  <span className="idea-choice-meta">{option.description}</span>
+                  <span className="idea-choice-meta mono">{lineupModels(option)}</span>
+                </label>
+              ))}
+            </fieldset>
+            {chosenLineup && !chosenLineup.ready && chosenLineup.missing_key && (
+              <p className="form-note">
+                The {chosenLineup.title.toLowerCase()} models need an API key. Put{" "}
+                <code>{chosenLineup.missing_key}=…</code> in the <code>.env</code> file next to{" "}
+                <code>pyproject.toml</code>; this page picks it up on its next load.
+              </p>
+            )}
+
             <div className="start-actions">
               <button type="submit" className="primary-button" disabled={!ready || submitting}>
                 {submitting ? "Starting…" : "Run the panel"}
@@ -183,7 +222,10 @@ export function StartPage() {
               {runs.slice(0, 8).map((run) => (
                 <li key={run.id}>
                   <Link to={`/runs/${run.id}`}>{run.idea_title}</Link>
-                  <span className="mono">{formatWhen(run.started_at)}</span>
+                  <span className="mono">
+                    {run.lineup === "local" ? "" : `${run.lineup} · `}
+                    {formatWhen(run.started_at)}
+                  </span>
                   <span className="mono" data-status={run.status}>
                     {run.status === "success"
                       ? formatSeconds(durationBetween(run.started_at, run.finished_at))
@@ -199,6 +241,19 @@ export function StartPage() {
       <PanelDiagram reduce={reduce} />
     </main>
   );
+}
+
+/** The critics' models, e.g. "GPT-6.2 Sol · Gemini 4 Carbon · Claude Sonnet 5.5 · Grok 4.7". */
+function lineupModels(lineup: LineupInfo): string {
+  return [...new Set(CRITICS.map((c) => modelName(lineup.models[c])))].join(" · ");
+}
+
+function readLineup(): LineupName {
+  try {
+    return window.localStorage.getItem(LINEUP_KEY) === "frontier" ? "frontier" : "local";
+  } catch {
+    return "local";
+  }
 }
 
 /** The panel's shape at rest: idea, four critics, verdict. */

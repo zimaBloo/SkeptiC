@@ -19,18 +19,38 @@ export interface Idea {
   text: string;
 }
 
+export type LineupName = "local" | "frontier";
+
+export interface LineupInfo {
+  name: LineupName;
+  title: string;
+  description: string;
+  models: Record<string, string>;
+  /** The lineup can run now: any API key it needs is set. */
+  ready: boolean;
+  /** The environment variable to set in .env before the lineup can run. */
+  missing_key: string | null;
+}
+
 export type RunStatus = "running" | "success" | "error" | "stopped";
 
 export interface RunSummary {
   id: string;
   idea_title: string;
+  lineup: LineupName;
   status: RunStatus;
   started_at: string | null;
   finished_at: string | null;
 }
 
 export type ProgressEvent =
-  | { time: string; event: "run_started"; critics: CriticName[]; models: Record<string, string> }
+  | {
+      time: string;
+      event: "run_started";
+      critics: CriticName[];
+      models: Record<string, string>;
+      parallel?: boolean;
+    }
   | { time: string; event: "critic_started"; critic: CriticName; model: string }
   | {
       time: string;
@@ -151,6 +171,7 @@ export interface PanelRecord {
   inspect_version: string | null;
   ollama_version: string | null;
   settings: Record<string, unknown>;
+  critics_parallel?: boolean | null;
   critics: CriticRecord[];
   combiner: CombinerRecord;
   scores: Record<string, number>;
@@ -198,10 +219,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   ideas: () => request<IdeaSummary[]>("/ideas"),
+  lineups: () => request<LineupInfo[]>("/lineups"),
   idea: (id: string) => request<Idea>(`/ideas/${encodeURIComponent(id)}`),
   runs: () => request<RunSummary[]>("/runs"),
   run: (id: string) => request<RunDetail>(`/runs/${encodeURIComponent(id)}`),
-  startRun: (body: { idea_id: string } | { title: string; text: string }) =>
+  startRun: (body: ({ idea_id: string } | { title: string; text: string }) & { lineup: LineupName }) =>
     request<{ id: string }>("/runs", { method: "POST", body: JSON.stringify(body) }),
   stopRun: (id: string) =>
     request<unknown>(`/runs/${encodeURIComponent(id)}/stop`, { method: "POST" }),

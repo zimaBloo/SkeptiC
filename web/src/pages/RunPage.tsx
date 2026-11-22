@@ -37,7 +37,7 @@ import {
   type StepState,
   type Timeline,
 } from "../flow/timeline";
-import { CRITIC_TITLES, modelName } from "../format";
+import { CRITIC_SHORT, CRITIC_TITLES, countWord, modelName } from "../format";
 import { useNow, usePlacement, useReducedMotion, useRevealGuard, useRun, useSize } from "../hooks";
 import { Verdict } from "./Verdict";
 
@@ -506,8 +506,24 @@ function StatusLine(props: {
   const elapsed =
     timeline.start !== null ? Math.max(0, (Math.min(at, timeline.end ?? at) - timeline.start) / 1000) : null;
   const step = currentStep(states);
-  let what = settling ? "The run ended before the first critic started" : "Starting the panel and loading the first model…";
-  if (step) {
+  const writing = CRITICS.filter((critic) => states[critic] === "working");
+  const cutOff = CRITICS.filter(
+    (critic) => states[critic] === "failed" && timeline.steps[critic].error === CUT_OFF,
+  );
+  let what = settling
+    ? "The run ended before the first critic started"
+    : run.lineup === "local"
+      ? "Starting the panel and loading the first model…"
+      : "Starting the panel…";
+  if (writing.length > 1) {
+    // Hosted critics run at the same time.
+    const who = writing.length === CRITICS.length ? "all four" : listed(writing.map((c) => CRITIC_SHORT[c]));
+    what = `${who.charAt(0).toUpperCase()}${who.slice(1)} critics are writing`;
+  } else if (cutOff.length > 1) {
+    // Only critics that ran at the same time can be stopped together.
+    const who = cutOff.length === CRITICS.length ? "all four" : listed(cutOff.map((c) => CRITIC_SHORT[c]));
+    what = `${who.charAt(0).toUpperCase()}${who.slice(1)} critics were stopped before they answered`;
+  } else if (step) {
     const state = states[step];
     const who = step === "combiner" ? "The combining step" : `${CRITIC_TITLES[step]} critic`;
     if (state === "failed" && timeline.steps[step].error === CUT_OFF) what = `${who} was ${CUT_OFF}`;
@@ -545,6 +561,11 @@ function StatusLine(props: {
       )}
     </div>
   );
+}
+
+/** ["market", "risk", "customer"] -> "market, risk and customer". */
+function listed(words: string[]): string {
+  return words.length < 2 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
 }
 
 /** Stopping throws away minutes of model time, so it takes a second, deliberate click. */
@@ -630,6 +651,9 @@ function PanelSummary({ run, record, onReplay }: { run: RunDetail; record: Panel
   const start = record?.started_at ?? null;
   const end = record?.finished_at ?? null;
   const seconds = start && end ? (Date.parse(end) - Date.parse(start)) / 1000 : null;
+  const models = record
+    ? new Set([...record.critics.map((c) => c.model), record.combiner.model].filter(Boolean)).size
+    : 0;
   return (
     <aside ref={ref} className="panel-summary" aria-label="The run">
       <h1 className="panel-idea">{run.idea_title}</h1>
@@ -645,7 +669,8 @@ function PanelSummary({ run, record, onReplay }: { run: RunDetail; record: Panel
         </ul>
       )}
       <p className="panel-meta mono">
-        {seconds !== null ? `${formatSeconds(seconds)} · ` : ""}four models · every call logged
+        {seconds !== null ? `${formatSeconds(seconds)} · ` : ""}
+        {models > 0 ? `${countWord(models)} ${run.lineup} models · ` : ""}every call logged
       </p>
       <div className="panel-actions">
         <Link to={`/runs/${run.id}/details`}>Each critic's issues</Link>
