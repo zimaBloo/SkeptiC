@@ -30,3 +30,6 @@ node_modules/
 .DS_Store
 .idea/
 .vscode/
+
+# Pilot outputs: raw model replies and grades stay local
+experiments/*/out/
