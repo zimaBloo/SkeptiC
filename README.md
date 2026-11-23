@@ -132,24 +132,52 @@ record.json
 
 ## First results
 
-A small test on 22 Nov 2026 compared the frontier panel with Claude Opus 5.5 reviewing alone: once with the panel's rules in a single prompt, and once just asked what is weak about the idea. The test ideas were made up, with answer keys written in advance. Two AI graders checked every review; where they disagreed, the table shows both counts.
+SkeptiC, the tool in this repository, reviews a business idea with four AI critics and merges their reviews into one verdict. It is built for an MSc thesis at the University of Helsinki, which asks whether such a panel reviews ideas better than one AI model on its own. A first small test, on 22 Nov 2026, says not yet: the panel did no better than Claude Opus 5.5 working alone, and it cost about twice as much.
 
-| | Panel | Opus alone, with the panel's rules | Opus alone, asked plainly |
+### How the test worked
+
+The test used 16 short, made-up business ideas, each with an answer key: a list of the problems planted in it, if any.
+
+- 12 new ideas came in pairs: a sound idea, and a copy of it with one fatal flaw added, meaning a problem that can only be fixed by changing the core idea. In one copy, the paying customers are children aged 7 to 12, who can't hold a payment card or sign a subscription on their own. A separate Claude model checked the 12 and rejected 3 of the flawed copies as poor tests (the flaw was not clearly fatal, was flagged in the text, or the copy changed more than the flaw). Those 3 were still reviewed but aren't scored.
+- 3 older ideas, written while SkeptiC was being built, had 13 planted weaknesses between them: problems a good review should name.
+- 1 more older idea was sound. With the 6 sound originals, that makes 7 sound ideas, there to see whether a reviewer raises false alarms.
+
+Three reviewers read every idea:
+
+1. Panel: SkeptiC itself. Four critics each judge one side of the idea (market, technical, customer, risk), each on a model from a different company: GPT-6.2 Sol (OpenAI), Gemini 4 Carbon (Google), Claude Sonnet 5.5 (Anthropic) and Grok 4.7 (xAI). Claude Opus 5.5 merges their reviews into one verdict, and only that verdict was scored.
+2. Opus with instructions: Claude Opus 5.5 alone, given all four critics' instructions in one prompt.
+3. Opus plain: Claude Opus 5.5 alone, asked only "What is weak or risky about this idea, and how could it be better?"
+
+The first two rate each problem minor, major or fatal; Opus plain has no set scale. The 12 new ideas were reviewed once each and the 4 older ones twice: 20 reviews per reviewer, 17 of them scored, and 60 reviews in all, which cost $5.09 not counting the grading.
+
+Two AI models that none of the reviewers use, GPT-6.1 Terra (OpenAI) and Gemini 4 Hydrogen (Google), graded every review. Each marked which answer-key problems the review named, fully or partly, and whether it called the idea unworkable; for Opus plain they judged that from its wording. Where the two graders' counts differ, the table shows both, joined by "or".
+
+### Results
+
+| | Panel | Opus with instructions | Opus plain |
 |---|:-:|:-:|:-:|
-| **3 ideas with one planted fatal flaw** | | | |
-| Found the flaw | 3 | 3 | 3 |
-| Said the idea can't work | 1 | 2 | 3 |
-| **13 planted weaknesses in 3 ideas, each reviewed twice (26 chances)** | | | |
-| Fully found | 18 or 22 | 23 | 25 |
-| **8 reviews of sound ideas** | | | |
-| Wrongly said the idea can't work | 0 | 1 | 0 or 1 |
-| **Quotes from the idea** | | | |
-| Word for word | 312 of 313 | 124 of 124 | not checked |
-| **Per review** | | | |
-| Cost | $0.13 | $0.06 | $0.06 |
-| Time | 79 s | 28 s | 36 s |
+| Fatal flaws named, of 3 | 3 | 3 | 3 |
+| ...and the idea called unworkable, of 3 | 1 | 2 | 3 |
+| Weaknesses fully named, of 26 (13 weaknesses, each idea reviewed twice; more is better) | 18 or 22 | 23 | 25 |
+| Weaknesses fully or partly named, of 26 | 24 or 25 | 23 | 25 or 26 |
+| Sound ideas wrongly called unworkable, of 8 reviews (7 ideas, one reviewed twice; fewer is better) | 0 | 1 | 0 or 1 |
+| Average cost of one review | 13 cents | 6 cents | 6 cents |
+| Average time for one review | 79 s | 28 s | 36 s |
 
-So the panel did no better than Opus alone, at twice the cost. It was also the least ready to call a fatally flawed idea unworkable, but in two of the three the critics who saw the flaw called it fixable, as the rules allow. The test is tiny, so none of these differences is conclusive, and model diversity and the local models are still untested. The [pilot report](experiments/pilot-2026-11/report.md) has the details.
+The panel fully named the fewest weaknesses, but counting partly named ones it was level with the other two. Part of the gap may be by design: the panel's merged verdict leaves out problems its critics rated minor. Opus plain named the most, but its reviews were 30 to 40% longer than the others, and the graders took nothing off for wrong or unneeded points, so a longer review had more chances to score.
+
+Only one of the three fatal flaws is clear-cut: the children-as-customers idea, which every reviewer called unworkable. For the other two, the panel's critics who named the flaw judged it fixable without changing the core idea, and SkeptiC's instructions say a fixable problem is never fatal. Opus with instructions, under the same rule, still called one of them unworkable. The full report calls the answer key arguable for those two, which the check let through, so this row rests on one idea.
+
+One part worked as designed. Every problem a critic raises must quote the idea, so a reader can check it against the idea's own words. Across its 20 reviews the panel's critics gave 313 quotes; SkeptiC's code checks each one, and 312 matched word for word. Opus with instructions, under the same rule, got 124 of 124.
+
+### What it doesn't show
+
+- The test is small: 17 scored reviews per reviewer.
+- Claude models drafted the 12 new ideas, ran the check and are part of every reviewer, which may favour the two reviewers that are Claude alone.
+- One of the three ideas with weaknesses was used earlier to tune SkeptiC's prompts.
+- It left out two things SkeptiC is built for: whether critics on four companies' models catch more than four critics on one model, and running entirely on your own computer with free local models, which SkeptiC can also do.
+
+The [full report](experiments/pilot-2026-11/report.md) has the details.
 
 ## Development
 
