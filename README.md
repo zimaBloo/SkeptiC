@@ -213,4 +213,4 @@ GitHub also checks that the web app builds.
 
 <br>
 
-<sub>No licence yet.</sub>
+<sub>[MIT licence](LICENSE)</sub>
